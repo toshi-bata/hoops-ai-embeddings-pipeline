@@ -1,5 +1,7 @@
 # cdk — provision a GPU box for the HOOPS AI embeddings pipeline
 
+*(日本語版: [README.ja.md](README.ja.md))*
+
 AWS CDK (TypeScript) project that provisions a single EC2 instance to run the
 3-step HOOPS AI embeddings pipeline (encode / train / index) at production or
 benchmark scale, on CPU and GPU, so the two can be compared on identical
@@ -57,32 +59,40 @@ project's deploy pattern.
 
 ### Find your IP for `allowedSshCidr`
 
-```bash
-curl -s https://checkip.amazonaws.com   # e.g. 14.3.142.47
+```powershell
+(Invoke-RestMethod https://checkip.amazonaws.com).Trim()   # e.g. 203.0.113.42
 ```
 
 Use the result as `-c allowedSshCidr=<your-ip>/32`.
 
 ### Deploy
 
-```bash
+These commands are run from wherever you have Node/npm and the AWS CLI --
+typically your own Windows machine, deploying to AWS, not on the EC2 instance
+itself. Shown in PowerShell; bash-equivalent env var syntax is noted inline.
+
+```powershell
 cd cdk
 npm install
 
-# AWS credentials for the target account/region
-export AWS_PROFILE=<your-profile>
-export CDK_DEFAULT_REGION=ap-northeast-1
+# AWS credentials for the target account/region -- CDK resolves the account
+# and region from THIS, automatically; don't set CDK_DEFAULT_ACCOUNT/REGION
+# by hand, it won't help (see "Troubleshooting" below if this step fails)
+$env:AWS_PROFILE = "<your-profile>"
 aws sts get-caller-identity
 
 # first time only
 npx cdk bootstrap aws://<ACCOUNT_ID>/ap-northeast-1
 
 # presigned SDK URL contains a query string with an ampersand -- quote it
-export HOOPS_AI_SDK_URL='https://.../hoops-ai-sdk-linux.tar.gz?X-Amz-...'
-export HOOPS_AI_LICENSE='<your-license-key>'
+$env:HOOPS_AI_SDK_URL = 'https://.../hoops-ai-sdk-linux.tar.gz?X-Amz-...'
+$env:HOOPS_AI_LICENSE = '<your-license-key>'
 
 npx cdk deploy -c keyName=<your-key-pair> -c allowedSshCidr=<your-ip>/32 --require-approval never
 ```
+
+bash: replace the `$env:AWS_PROFILE = "..."`-style lines with
+`export AWS_PROFILE=...` / `export HOOPS_AI_SDK_URL='...'` / etc.
 
 If you omit `HOOPS_AI_SDK_URL`, the instance still comes up with both venvs
 and the repo cloned -- you'll just need to `pip install` the SDK into
@@ -91,6 +101,34 @@ and the repo cloned -- you'll just need to `pip install` the SDK into
 `userDataCausesReplacement: true` means editing `assets/user-data.sh` or
 `assets/install-sdk.sh` and redeploying **replaces the instance** (new
 `InstanceId`), so bootstrap always reruns from a clean box.
+
+### Troubleshooting: SSO / profile errors
+
+If you're on an SSO (IAM Identity Center) profile, `aws sso login --profile
+<name>` succeeding does NOT mean subsequent commands automatically use that
+profile. `$env:AWS_PROFILE` (or an explicit `--profile <name>` on every
+command) has to match the profile you logged into, in the SAME terminal, for
+every command above -- `aws sts get-caller-identity`, `npx cdk bootstrap`,
+`npx cdk deploy`. If it doesn't match (wrong profile, or unset), you'll see
+one of these, neither of which means your login actually expired:
+
+- `aws` commands: `The SSO session associated with this profile has expired
+  or is otherwise invalid` -- almost always means `$env:AWS_PROFILE` points
+  at a different (possibly genuinely expired) profile than the one you just
+  logged into, not that the fresh login failed.
+- `cdk deploy`/`cdk synth`: `Unable to resolve AWS account to use` -- CDK
+  couldn't resolve credentials at all, same root cause. Setting
+  `$env:CDK_DEFAULT_ACCOUNT`/`CDK_DEFAULT_REGION` by hand does not fix this;
+  fix `$env:AWS_PROFILE` instead and let CDK resolve them itself.
+
+Confirm with `aws sts get-caller-identity` (no `--profile` flag, so it
+reflects whatever `$env:AWS_PROFILE` currently is) before re-running
+`cdk deploy` -- it should print the account/role you expect, not an error.
+
+Also note SSO login does not reliably carry over between different profiles
+even when they share the same SSO start URL/region -- log into each profile
+you use (`aws sso login --profile <name>`) rather than assuming one login
+covers all of them.
 
 ## First login
 

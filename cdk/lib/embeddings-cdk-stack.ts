@@ -97,12 +97,25 @@ export class EmbeddingsBenchStack extends cdk.Stack {
     // ------------------------------------------------------------------
     // User-data bootstrap script
     // ------------------------------------------------------------------
-    const userDataScript = fs.readFileSync(
+    const rawUserDataScript = fs.readFileSync(
       path.join(__dirname, '..', 'assets', 'user-data.sh'),
       'utf8',
     );
+    // user-data.sh's own git-clone step needs BENCH_REPO_URL to already be
+    // set when IT runs. UserData.custom(content).addCommands(...) APPENDS
+    // new lines after the custom content (CustomUserData just joins `lines`
+    // in push order) -- it does not inject them before it. Calling
+    // addCommands() here for the export would define BENCH_REPO_URL only
+    // after the whole script, including the clone step, had already run,
+    // silently skipping the clone (the `if [[ -n "${BENCH_REPO_URL:-}" ]]`
+    // check would see it unset and do nothing -- no error, so this is easy
+    // to miss until you notice ~/bench is empty). Splice the export in right
+    // after the shebang line instead, so it's set before anything else runs.
+    const userDataScript = rawUserDataScript.replace(
+      /^(#!.*\n)/,
+      `$1export BENCH_REPO_URL='${repoUrl}'\n`,
+    );
     const userData = ec2.UserData.custom(userDataScript);
-    userData.addCommands(`set +x`, `export BENCH_REPO_URL='${repoUrl}'`, `set -x`);
 
     // Optionally automate the HOOPS AI SDK install + license activation. When
     // a download URL is supplied (context `sdkUrl` or env HOOPS_AI_SDK_URL),
