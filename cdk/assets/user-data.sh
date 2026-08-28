@@ -67,7 +67,11 @@ echo 'export DISPLAY=:99' > /etc/profile.d/hoops_ai_display.sh
 
 # 4. Clone this repo. BENCH_REPO_URL is exported by the CDK stack before this
 #    script runs (context `repoUrl`, defaults to the public GitHub repo).
-mkdir -p "$BENCH_DIR"
+#    This whole script runs as root, but the clone must be owned by
+#    $BENCH_USER -- create the directory as that user too (a root-owned
+#    mkdir here, even just for the parent dir, leaves `git clone` unable to
+#    write .git into it as $BENCH_USER: "Permission denied").
+sudo -u "$BENCH_USER" mkdir -p "$BENCH_DIR"
 if [[ -n "${BENCH_REPO_URL:-}" ]]; then
   sudo -u "$BENCH_USER" git clone "$BENCH_REPO_URL" "$BENCH_DIR"
 fi
