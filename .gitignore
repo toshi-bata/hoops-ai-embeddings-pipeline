@@ -1,0 +1,38 @@
+# Output / artifacts
+out/
+
+# Benchmark results, logs, and file lists -- these can contain customer CAD
+# file paths and should never be committed. Publish only curated reports/*.html.
+logs/
+results/
+results_heavy/
+results_pass2/
+filelists/
+
+# Heavy-file benchmark: large STEP copies + runtime temp
+heavy_copies/
+
+# Standardized benchmark dataset (copied from a customer CAD corpus)
+bench_parts/
+
+# Secrets + machine-specific config (copy .env.example to make this)
+.env
+*.pem
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Temp
+.hoops_embeddings_temp/
+
+# Runtime logs
+too_heavy_files.log
+training_errors.log
+error_summary.json
+
+# CDK
+cdk/cdk.out/
+cdk/cdk.context.json
+cdk/node_modules/

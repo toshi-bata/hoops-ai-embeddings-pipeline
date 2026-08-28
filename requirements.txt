@@ -1,0 +1,6 @@
+# Lightweight dependencies of the benchmark/report tooling itself.
+# torch and hoops_ai are NOT listed here on purpose -- see README "Prerequisites":
+#   - torch must be installed as a matched CPU or CUDA build for your accelerator
+#     (pip install torch --index-url https://download.pytorch.org/whl/cpu | cuXXX)
+#   - hoops_ai is distributed with the licensed HOOPS AI SDK, not on PyPI
+psutil>=5.9
