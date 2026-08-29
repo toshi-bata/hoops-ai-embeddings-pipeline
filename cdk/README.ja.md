@@ -61,6 +61,7 @@ npm install
 # リージョンを自動解決する。CDK_DEFAULT_ACCOUNT/REGIONを手動で設定しても
 # 意味がない(このステップで失敗する場合は下記「トラブルシューティング」参照)
 $env:AWS_PROFILE = "<your-profile>"
+aws sso login --profile <your-profile>   # SSOセッションが失効している場合のみ。下のaws stsが通るなら不要
 aws sts get-caller-identity
 
 # 初回のみ

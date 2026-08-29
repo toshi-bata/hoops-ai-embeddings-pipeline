@@ -79,6 +79,7 @@ npm install
 # and region from THIS, automatically; don't set CDK_DEFAULT_ACCOUNT/REGION
 # by hand, it won't help (see "Troubleshooting" below if this step fails)
 $env:AWS_PROFILE = "<your-profile>"
+aws sso login --profile <your-profile>   # only if your SSO session expired; skip if aws sts below already works
 aws sts get-caller-identity
 
 # first time only
