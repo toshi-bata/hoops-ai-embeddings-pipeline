@@ -101,14 +101,15 @@ install, `apt upgrade`, and `pip install "hoops-ai[all]"` alone take several
 minutes). Checking `nvidia-smi` / `hoops_ai` right after `cdk deploy` returns
 will look broken when it's really just still running. To have the terminal
 block until bootstrap has actually finished, capture the outputs and SSH in
-to wait on `cloud-init`:
+to wait on `cloud-init` (requires `keyName`; there's no SSM equivalent of
+this one-liner):
 
 ```powershell
 npx cdk deploy -c keyName=<your-key-pair> -c allowedSshCidr=<your-ip>/32 `
     --require-approval never --outputs-file outputs.json
 
 $dns = (Get-Content outputs.json | ConvertFrom-Json).HoopsAiEmbeddingsPipelineStack.PublicDnsName
-ssh -o StrictHostKeyChecking=no ubuntu@$dns "cloud-init status --wait; cloud-init status --long"
+ssh -i <path-to-key>.pem -o StrictHostKeyChecking=no ubuntu@$dns "cloud-init status --wait; cloud-init status --long"
 ```
 
 The prompt won't return until bootstrap is done; the final `cloud-init
