@@ -95,6 +95,26 @@ $env:HOOPS_AI_LICENSE = '<your-license-key>'
 npx cdk deploy -c keyName=<your-key-pair> -c allowedSshCidr=<your-ip>/32 --require-approval never
 ```
 
+`cdk deploy` returns once the CloudFormation stack finishes creating -- which
+is *before* user-data.sh has finished running on the instance (driver
+install, `apt upgrade`, and `pip install "hoops-ai[all]"` alone take several
+minutes). Checking `nvidia-smi` / `hoops_ai` right after `cdk deploy` returns
+will look broken when it's really just still running. To have the terminal
+block until bootstrap has actually finished, capture the outputs and SSH in
+to wait on `cloud-init`:
+
+```powershell
+npx cdk deploy -c keyName=<your-key-pair> -c allowedSshCidr=<your-ip>/32 `
+    --require-approval never --outputs-file outputs.json
+
+$dns = (Get-Content outputs.json | ConvertFrom-Json).HoopsAiEmbeddingsPipelineStack.PublicDnsName
+ssh -o StrictHostKeyChecking=no ubuntu@$dns "cloud-init status --wait; cloud-init status --long"
+```
+
+The prompt won't return until bootstrap is done; the final `cloud-init
+status --long` line tells you `done` or `error` (and which module failed, if
+any) without needing a separate SSH session.
+
 bash: replace the `$env:AWS_PROFILE = "..."`-style lines with
 `export AWS_PROFILE=...` / `export HOOPS_AI_LICENSE='...'` / etc.
 

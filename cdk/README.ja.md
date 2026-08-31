@@ -72,6 +72,18 @@ $env:HOOPS_AI_LICENSE = '<your-license-key>'
 npx cdk deploy -c keyName=<your-key-pair> -c allowedSshCidr=<your-ip>/32 --require-approval never
 ```
 
+`cdk deploy`はCloudFormationスタックの作成が完了した時点でプロンプトを返す――これは、インスタンス上の`user-data.sh`の実行が**終わる前**のタイミングである(ドライバのインストール・`apt upgrade`・`pip install "hoops-ai[all]"`だけでも数分かかる)。`cdk deploy`が返った直後に`nvidia-smi`や`hoops_ai`を確認すると、実際にはまだ実行中なだけなのに壊れているように見える。ブートストラップが本当に終わるまでターミナルをブロックしたい場合は、出力をファイルに保存してSSHで`cloud-init`の完了を待つ:
+
+```powershell
+npx cdk deploy -c keyName=<your-key-pair> -c allowedSshCidr=<your-ip>/32 `
+    --require-approval never --outputs-file outputs.json
+
+$dns = (Get-Content outputs.json | ConvertFrom-Json).HoopsAiEmbeddingsPipelineStack.PublicDnsName
+ssh -o StrictHostKeyChecking=no ubuntu@$dns "cloud-init status --wait; cloud-init status --long"
+```
+
+ブートストラップが終わるまでプロンプトは返ってこない。最後の`cloud-init status --long`の出力で、別途SSHし直さなくても`done`か`error`か(失敗していればどのモジュールか)が分かる。
+
 bashの場合: `$env:AWS_PROFILE = "..."`のような行を`export AWS_PROFILE=...`/`export HOOPS_AI_LICENSE='...'`等に置き換える。
 
 `userDataCausesReplacement: true`のため、`assets/user-data.sh`を編集して再デプロイすると**インスタンスが置き換わる**(`InstanceId`が変わる)。これによりブートストラップは常にクリーンな状態から再実行される。
