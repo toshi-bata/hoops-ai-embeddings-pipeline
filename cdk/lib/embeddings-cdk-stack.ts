@@ -133,12 +133,18 @@ export class EmbeddingsBenchStack extends cdk.Stack {
     if (licenseKey) {
       // user-data.sh runs with `set -x`; disable tracing before emitting the
       // license key so it's never written to /var/log/cloud-init-output.log
-      // in clear text. Write as root then chown, since `>>` on a not-yet-
-      // existing file would otherwise create it as root (same trap the
-      // BENCH_DIR mkdir hit -- see user-data.sh step 4).
+      // in clear text. Use a single-quoted heredoc (<<'ENV_EOF') so bash does
+      // NOT re-interpret the key's contents at all: HOOPS AI license keys
+      // routinely contain '$', which inside a plain double-quoted echo (as
+      // this used to be) bash tries to expand as a variable/positional-
+      // parameter reference -- that produced a real
+      // "line N: $1: unbound variable" failure under `set -u` here. Write as
+      // root then chown, since creating the file this way would otherwise
+      // leave it root-owned (same trap the BENCH_DIR mkdir hit -- see
+      // user-data.sh step 4).
       userData.addCommands(
         'set +x',
-        `echo "HOOPS_AI_LICENSE='${licenseKey}'" >> /home/ubuntu/bench/.env`,
+        `cat > /home/ubuntu/bench/.env <<'ENV_EOF'\nHOOPS_AI_LICENSE='${licenseKey}'\nENV_EOF`,
         'chown ubuntu:ubuntu /home/ubuntu/bench/.env',
         'set -x',
       );
