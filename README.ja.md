@@ -18,12 +18,14 @@ HOOPS AI embeddingsワークフロー――CADファイルのフォルダを**�
 
 これは、CPU用ビルド/GPU用ビルドのvenvが満たしているべき状態の説明である――既にHOOPS AI SDKのセットアップ済み環境(HOOPS AI自身のセットアップ手順に沿ったもの)があり`hoops_ai`がimportできるなら、以下はおそらく既に満たされているので、下のQuickstartへ進んでよい。以下のコマンドが関係してくるのは、venvをゼロから作る場合(新しいマシン上で、あるいは`cdk/`経由――そちらはCPU/GPUのpipインストールを自動的に行う)である。
 
-- ライセンス済みのHOOPS AI SDKインストール、`hoops_ai`パッケージがimport可能であること。
-- `torch`を、使用するアクセラレータに合ったビルドでインストールしていること:
+- アクセラレータごとのvenvに`hoops-ai[all]`をインストールしていること。[公式pipインストール手順](https://docs.techsoft3d.com/hoops/ai/getting_started/install_pip.html)の通り(Python 3.12。hoops-ai自身のパッケージ用`--extra-index-url`と、対応するtorchビルド用`--extra-index-url`の両方が必要):
   ```bash
-  pip install torch --index-url https://download.pytorch.org/whl/cpu     # CPU venv
-  pip install torch --index-url https://download.pytorch.org/whl/cu130   # GPU venv (CUDA 13.0)
+  pip install "hoops-ai[all]" --extra-index-url https://packages.techsoft3d.com/pip \
+      --extra-index-url https://download.pytorch.org/whl/cpu     # CPU venv
+  pip install "hoops-ai[all]" --extra-index-url https://packages.techsoft3d.com/pip \
+      --extra-index-url https://download.pytorch.org/whl/cu130   # GPU venv (CUDA 13.0)
   ```
+  インストール自体に認証情報は不要――ライセンスキーは実行時のSDK有効化にのみ必要(下記`.env`参照)。`cdk/`はこの2つのコマンドを自動的に実行する。
 - `pip install -r requirements.txt`(`psutil`だけ。それ以外は上記の通り)。
 - **`.env`ファイル** -- [`.env.example`](.env.example)を`.env`(リポジトリ直下、gitignore対象)にコピーして中身を埋める。この1ファイルがここにあるすべてから読まれる:`bench_step*.py`/`run_pipeline.py`のあらゆる実行は`bench_common.py`の`load_dotenv()`経由で`HOOPS_AI_LICENSE`と`HOOPS_AI_CKPT`をここから拾い、`run_benchmark.ps1`/`preflight.ps1`/`run_local_sweep.ps1`も`resolve_local_env.ps1`経由で`CPU_PY`/`GPU_PY`/`HOOPS_AI_CKPT`をここから拾う――PowerShell専用の別設定ファイルは存在しない。探索順序(最初に見つかったものを使用):`./.env`、`../.env`(1つ上の階層――このリポジトリが`CPU1.1`/`GPU1.1`の隣に置かれている場合はSDKインストールのルート)、`../CPU1.1/.env`、`../GPU1.1/.env`。
   - `HOOPS_AI_LICENSE` -- すべてのスクリプトで必須。ファイルを持ちたくなければ直接環境変数としてexportしてもよい。

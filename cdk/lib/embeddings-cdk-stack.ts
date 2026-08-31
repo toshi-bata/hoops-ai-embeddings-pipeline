@@ -16,8 +16,11 @@ import * as iam from 'aws-cdk-lib/aws-iam';
  *     No web server runs on this box, so nothing else is exposed.
  *   - A g6.8xlarge (default) Ubuntu 24.04 LTS EC2 instance, bootstrapped via
  *     user-data with the NVIDIA driver, Xvfb (HOOPS AI needs an X display
- *     even for offscreen/headless work), and two Python venvs (CPU-only
- *     torch and CUDA torch) with this repo cloned into them.
+ *     even for offscreen/headless work), and two Python venvs -- CPU1.1 and
+ *     GPU1.1 -- each with `hoops-ai[all]` (and the matching torch build)
+ *     pip-installed per
+ *     https://docs.techsoft3d.com/hoops/ai/getting_started/install_pip.html,
+ *     and this repo cloned into ~/bench.
  *   - An IAM role with the SSM core policy, so you can connect via Session
  *     Manager without opening SSH to the world.
  *   - A large encrypted GP3 root volume (default 300 GiB) for the CAD
@@ -26,9 +29,11 @@ import * as iam from 'aws-cdk-lib/aws-iam';
  * What this stack deliberately does NOT do:
  *   - It does not transfer your CAD corpus. That is customer data; copy it
  *     yourself with scp/rsync after the instance is up (see README).
- *   - It does not install the HOOPS AI SDK unless you pass a download URL
- *     (context `sdkUrl` / env HOOPS_AI_SDK_URL) at deploy time -- it is
- *     licensed software, not something to bake into a public CDK app.
+ *   - It does not activate a HOOPS AI license. The pip install itself needs
+ *     no credentials, but the SDK is inert without a license key at runtime.
+ *     Pass one via `hoopsAiLicense` (context) / HOOPS_AI_LICENSE (env) to
+ *     have it written to ~/bench/.env automatically, or create that file
+ *     yourself after the instance is up.
  *   - The NVIDIA driver install typically needs one reboot before
  *     `nvidia-smi` reports the GPU; see README for the one-time
  *     verification step.
@@ -117,33 +122,26 @@ export class EmbeddingsBenchStack extends cdk.Stack {
     );
     const userData = ec2.UserData.custom(userDataScript);
 
-    // Optionally automate the HOOPS AI SDK install + license activation. When
-    // a download URL is supplied (context `sdkUrl` or env HOOPS_AI_SDK_URL),
-    // append a step that downloads/extracts the SDK and pip-installs hoops_ai
-    // into both venvs. The URL is a short-lived presigned link and is
-    // intentionally NOT committed; pass it at deploy time. When omitted,
-    // follow the manual SDK transfer steps in the README.
-    const sdkUrl = (this.node.tryGetContext('sdkUrl') as string) ?? process.env.HOOPS_AI_SDK_URL;
-    if (sdkUrl) {
-      const installScript = fs.readFileSync(
-        path.join(__dirname, '..', 'assets', 'install-sdk.sh'),
-        'utf8',
-      );
-
-      // Optional license key, written to ~/bench/.env on the instance.
-      const licenseKey =
-        (this.node.tryGetContext('hoopsAiLicense') as string) ??
-        process.env.HOOPS_AI_LICENSE;
-
-      const exports = [`export HOOPS_AI_SDK_URL='${sdkUrl}'`];
-      if (licenseKey) {
-        exports.push(`export HOOPS_AI_LICENSE='${licenseKey}'`);
-      }
+    // Optional license key: write ~/bench/.env once the repo has been cloned
+    // (this step is appended AFTER the whole script above runs, which is
+    // fine here since it only needs $BENCH_DIR to already exist -- unlike
+    // BENCH_REPO_URL, nothing earlier in user-data.sh depends on this).
+    // hoops-ai itself installs unconditionally above; this only controls
+    // whether the license is auto-activated or left for you to add by hand.
+    const licenseKey =
+      (this.node.tryGetContext('hoopsAiLicense') as string) ?? process.env.HOOPS_AI_LICENSE;
+    if (licenseKey) {
       // user-data.sh runs with `set -x`; disable tracing before emitting the
-      // secrets so the presigned URL and license key are never written to
-      // /var/log/cloud-init-output.log in clear text. install-sdk.sh keeps
-      // `set -eu` (no -x) so the secret-handling commands stay untraced too.
-      userData.addCommands('set +x', ...exports, installScript);
+      // license key so it's never written to /var/log/cloud-init-output.log
+      // in clear text. Write as root then chown, since `>>` on a not-yet-
+      // existing file would otherwise create it as root (same trap the
+      // BENCH_DIR mkdir hit -- see user-data.sh step 4).
+      userData.addCommands(
+        'set +x',
+        `echo "HOOPS_AI_LICENSE='${licenseKey}'" >> /home/ubuntu/bench/.env`,
+        'chown ubuntu:ubuntu /home/ubuntu/bench/.env',
+        'set -x',
+      );
     }
 
     // Optional existing EC2 key pair for SSH access.

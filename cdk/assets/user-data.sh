@@ -9,14 +9,16 @@
 #     g6.8xlarge / NVIDIA L4 instance; see README "known pitfalls")
 #   - Xvfb as a systemd service (HOOPS AI needs an X display even for
 #     offscreen/headless work)
-#   - two Python venvs: CPU1.1 (CPU-only torch) and GPU1.1 (CUDA torch)
+#   - two Python venvs, CPU1.1 and GPU1.1, each with `hoops-ai[all]` (which
+#     pulls in the matching torch build itself) installed per
+#     https://docs.techsoft3d.com/hoops/ai/getting_started/install_pip.html
 #   - this repo, cloned to ~/bench
 #
-# The HOOPS AI SDK itself (the `hoops_ai` package) is proprietary and is NOT
-# installed here unless HOOPS_AI_SDK_URL is exported before this script runs
-# (see install-sdk.sh, appended conditionally by the CDK stack). Without it,
-# the venvs are created but `import hoops_ai` will fail until you install the
-# SDK manually - see README.
+# A license key still has to be activated at runtime (hoops_ai.set_license(),
+# via HOOPS_AI_LICENSE) -- the pip install itself needs no credentials, but
+# the SDK won't do anything useful without one. If the CDK stack was given
+# `hoopsAiLicense`/HOOPS_AI_LICENSE, it appends a step after this script to
+# write ~/bench/.env; otherwise create that file yourself (see README).
 #
 set -eux
 export DEBIAN_FRONTEND=noninteractive
@@ -76,21 +78,24 @@ if [[ -n "${BENCH_REPO_URL:-}" ]]; then
   sudo -u "$BENCH_USER" git clone "$BENCH_REPO_URL" "$BENCH_DIR"
 fi
 
-# 5. Two venvs: CPU-only torch and CUDA torch. hoops_ai itself is added by
-#    install-sdk.sh if HOOPS_AI_SDK_URL was supplied; otherwise these venvs
-#    are ready for you to `pip install` the SDK into manually.
+# 5. Two venvs, each with hoops-ai[all] (CAD access, ML, visualization,
+#    notebooks, the converter) plus the matching torch build, per the
+#    official pip install docs (both --extra-index-urls are required
+#    together: one for hoops-ai's own packages, one for the torch build).
 sudo -u "$BENCH_USER" python3 -m venv "$SDK_ROOT/CPU1.1/.venv"
 sudo -u "$BENCH_USER" "$SDK_ROOT/CPU1.1/.venv/bin/pip" install --upgrade pip
-sudo -u "$BENCH_USER" "$SDK_ROOT/CPU1.1/.venv/bin/pip" install \
-    torch --index-url https://download.pytorch.org/whl/cpu
+sudo -u "$BENCH_USER" "$SDK_ROOT/CPU1.1/.venv/bin/pip" install "hoops-ai[all]" \
+    --extra-index-url https://packages.techsoft3d.com/pip \
+    --extra-index-url https://download.pytorch.org/whl/cpu
 if [[ -f "$BENCH_DIR/requirements.txt" ]]; then
   sudo -u "$BENCH_USER" "$SDK_ROOT/CPU1.1/.venv/bin/pip" install -r "$BENCH_DIR/requirements.txt"
 fi
 
 sudo -u "$BENCH_USER" python3 -m venv "$SDK_ROOT/GPU1.1/.venv"
 sudo -u "$BENCH_USER" "$SDK_ROOT/GPU1.1/.venv/bin/pip" install --upgrade pip
-sudo -u "$BENCH_USER" "$SDK_ROOT/GPU1.1/.venv/bin/pip" install \
-    torch --index-url https://download.pytorch.org/whl/cu130
+sudo -u "$BENCH_USER" "$SDK_ROOT/GPU1.1/.venv/bin/pip" install "hoops-ai[all]" \
+    --extra-index-url https://packages.techsoft3d.com/pip \
+    --extra-index-url https://download.pytorch.org/whl/cu130
 if [[ -f "$BENCH_DIR/requirements.txt" ]]; then
   sudo -u "$BENCH_USER" "$SDK_ROOT/GPU1.1/.venv/bin/pip" install -r "$BENCH_DIR/requirements.txt"
 fi
@@ -99,6 +104,6 @@ mkdir -p "$BENCH_HOME/dataset"
 chown -R "$BENCH_USER":"$BENCH_USER" "$BENCH_HOME"
 
 echo "Bootstrap complete. Reboot once so the NVIDIA driver loads, then verify"
-echo "with 'nvidia-smi'. Copy your CAD corpus into ~/dataset, then see the"
-echo "repo README for how to install the HOOPS AI SDK (if not done via"
-echo "HOOPS_AI_SDK_URL) and run the pipeline."
+echo "with 'nvidia-smi'. Copy your CAD corpus into ~/dataset, create ~/bench/.env"
+echo "with HOOPS_AI_LICENSE (done automatically if hoopsAiLicense was passed at"
+echo "deploy time), then see the repo README to run the pipeline."

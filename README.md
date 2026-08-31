@@ -40,12 +40,19 @@ can skip straight to the Quickstart below. These commands matter when you're
 building a venv from scratch (e.g. on a fresh machine, or via `cdk/`, which
 runs the CPU/GPU pip installs below automatically):
 
-- A licensed HOOPS AI SDK install, with the `hoops_ai` package importable.
-- `torch`, installed as a build that matches your accelerator:
+- `hoops-ai[all]` installed into a venv per accelerator, per the
+  [official pip install docs](https://docs.techsoft3d.com/hoops/ai/getting_started/install_pip.html)
+  (Python 3.12; the `--extra-index-url` for hoops-ai's own packages and the
+  one for the matching torch build are both required together):
   ```bash
-  pip install torch --index-url https://download.pytorch.org/whl/cpu     # CPU venv
-  pip install torch --index-url https://download.pytorch.org/whl/cu130   # GPU venv (CUDA 13.0)
+  pip install "hoops-ai[all]" --extra-index-url https://packages.techsoft3d.com/pip \
+      --extra-index-url https://download.pytorch.org/whl/cpu     # CPU venv
+  pip install "hoops-ai[all]" --extra-index-url https://packages.techsoft3d.com/pip \
+      --extra-index-url https://download.pytorch.org/whl/cu130   # GPU venv (CUDA 13.0)
   ```
+  The install itself needs no credentials; a license key is only required to
+  activate the SDK at runtime (see `.env` below). `cdk/` runs both commands
+  automatically.
 - `pip install -r requirements.txt` (just `psutil`; everything else above).
 - **A `.env` file** -- copy [`.env.example`](.env.example) to `.env` (repo
   root, gitignored) and fill it in. This one file is read by everything here:
