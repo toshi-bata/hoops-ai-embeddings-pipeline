@@ -123,7 +123,7 @@ def main() -> None:
 
     def dump(name: str, files: list[Path]) -> None:
         path = out_dir / name
-        path.write_text("\n".join(str(f) for f in files) + "\n", encoding="utf-8")
+        path.write_text("\n".join(str(f) for f in files) + "\n", encoding="utf-8", newline="\n")
         total_mb = sum(f.stat().st_size for f in files) / 1024 ** 2
         print(f"[mech] {name:16s} {len(files):4d} files  {total_mb:8.1f} MB  -> {path}")
 

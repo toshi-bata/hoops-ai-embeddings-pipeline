@@ -85,9 +85,17 @@ def parse_extensions(raw: str | None) -> set[str] | None:
 
 def freeze_filelist(files: list[str], out_path: Path) -> Path:
     """Write a discovered file list to disk so it can be reused verbatim
-    (e.g. passed to a second step, or inspected/audited later)."""
+    (e.g. passed to a second step, or inspected/audited later).
+
+    newline="\n" forces LF-only line endings even when run on Windows --
+    without it, a list generated on Windows and copied to a Linux box breaks
+    `head -n1`/string-comparison based sanity checks in the shell scripts
+    (the path gains an invisible trailing \\r that doesn't match the real
+    file), even though Python's own line-splitting elsewhere tolerates
+    either ending fine.
+    """
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(files) + "\n", encoding="utf-8")
+    out_path.write_text("\n".join(files) + "\n", encoding="utf-8", newline="\n")
     return out_path
 
 CSV_FIELDS = [

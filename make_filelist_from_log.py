@@ -148,7 +148,12 @@ def main() -> None:
 
     out = Path(args.out) if args.out else BENCH_ROOT / "filelists" / "mech_heavy.txt"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text("\n".join(out_paths) + "\n", encoding="utf-8")
+    # newline="\n": this is typically run on Windows against a Windows-side
+    # report, but the list is consumed by shell scripts on the Linux box --
+    # CRLF line endings would leave a trailing \r on each path that breaks
+    # `head -n1`/string-comparison sanity checks there even though the real
+    # file exists.
+    out.write_text("\n".join(out_paths) + "\n", encoding="utf-8", newline="\n")
 
     manifest = {
         "source_report": str(log_path),

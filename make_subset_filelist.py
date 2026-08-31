@@ -53,7 +53,7 @@ def main() -> None:
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text("\n".join(sub) + "\n", encoding="utf-8")
+    out.write_text("\n".join(sub) + "\n", encoding="utf-8", newline="\n")
 
     cats = Counter(l.replace("\\", "/").split("/")[0] for l in sub)
     print(f"wrote {len(sub)} files -> {out}  (from {len(lines)})")
