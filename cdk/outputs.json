@@ -1,8 +1,0 @@
-{
-  "HoopsAiEmbeddingsPipelineStack": {
-    "NextSteps": "ssh in, run `nvidia-smi` to confirm the GPU driver loaded (reboot once if not), copy your CAD corpus into ~/dataset (scp/rsync), then see the repo README for run_pipeline.py / run_heavy_batch.sh usage",
-    "InstanceId": "i-0497bce7df1ebb364",
-    "SshCommand": "ssh -i <path-to-toshi-key-pair-tokyo-ts3d-2.pem> ubuntu@ec2-43-207-89-57.ap-northeast-1.compute.amazonaws.com",
-    "PublicDnsName": "ec2-43-207-89-57.ap-northeast-1.compute.amazonaws.com"
-  }
-}

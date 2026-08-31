@@ -36,3 +36,4 @@ error_summary.json
 cdk/cdk.out/
 cdk/cdk.context.json
 cdk/node_modules/
+cdk/outputs.json
