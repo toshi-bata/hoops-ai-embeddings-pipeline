@@ -379,7 +379,7 @@ def training_section(rows: list[dict]) -> list[str]:
     out.append(L(
         f"Ran on **AWS g6.8xlarge** (AMD EPYC, 16 physical cores + **NVIDIA L4** "
         f"GPU) against a **{n_full:,}-file** heavy mechanical-CAD corpus (`mechcad`), "
-        f"the full corpus behind the 2,000-file Step 1 / Step 3 subset above. "
+        f"the same corpus used for the Step 1 / Step 3 worker sweeps above. "
         f"Both devices train from scratch for 10 epochs with the **same dataset "
         f"pointer**, batch_size=64, num_workers=0, matmul=high and a fixed seed, "
         f"so the two runs produce the *same model* and the wall-clock gap is a "
@@ -390,7 +390,7 @@ def training_section(rows: list[dict]) -> list[str]:
         f"Holding batch_size=64 (the tutorial default) keeps the model identical "
         f"and isolates device speed. At this scale each epoch is ~204 batches.\n",
         f"**AWS g6.8xlarge**（AMD EPYC・物理16コア + **NVIDIA L4** GPU）で、"
-        f"上記 Step 1 / Step 3 の2,000ファイルサブセットの元となる全コーパス "
+        f"上記 Step 1 / Step 3 のワーカースイープと同じ全コーパス "
         f"**{n_full:,}ファイル**のヘビーな機械CADコーパス（`mechcad`）に対して実行。"
         f"両デバイスとも**同一の"
         f"データセットポインタ**・batch_size=64・num_workers=0・matmul=high・固定seed で"
@@ -816,12 +816,12 @@ def env_section(scope: str) -> list[str]:
             "env_aws_",
             "AWS g6.8xlarge (EC2)",
             "AWS g6.8xlarge (EC2)",
-            "Heavy-scale host: the 2,000-file Step 1 / Step 3 sweeps and the "
-            "10,000-file Step 2 CPU-vs-GPU run were executed here. Both installs "
+            "Heavy-scale host: the ~10k-file Step 1 worker sweep and the "
+            "Step 2 CPU-vs-GPU training run were executed here. Both installs "
             "share the same instance; only the torch wheel differs (shared rows "
             "are merged).",
-            "ヘビースケール実行環境: 2,000ファイルの Step 1 / Step 3 スイープと "
-            "10,000ファイルの Step 2 CPU vs GPU をこの環境で実行。両インストールは"
+            "ヘビースケール実行環境: 約1万ファイルの Step 1 ワーカースイープと "
+            "Step 2 CPU vs GPU 学習をこの環境で実行。両インストールは"
             "同一インスタンス上で、異なるのは torch wheel のみ（共通行はセル結合）。")
     else:
         block = _machine_block(
@@ -848,18 +848,41 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
     is_aws = scope == "aws"
     has_training = any(r["step"] == "training" and r["phase"] == "HB2"
                        for r in rows)
+    # Data-driven headline figures for the intro/summary (Step 2 CPU vs GPU),
+    # so the prose never contradicts the tables below when the run changes.
+    _hb2 = [r for r in rows if r["step"] == "training" and r["phase"] == "HB2"]
+    _ns2 = sorted({r["n_files"] for r in _hb2 if r["n_files"]})
+    n_full = _ns2[-1] if _ns2 else None
+
+    def _spe_at(accel: str) -> float | None:
+        for r in _hb2:
+            if r["accelerator"] == accel and r["n_files"] == n_full:
+                v = (r.get("sub_timings_d") or {}).get("s_per_epoch")
+                try:
+                    return float(v) if v else None
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    cpu_spe = _spe_at("cpu")
+    gpu_spe = _spe_at("gpu")
+    gpu_x = (cpu_spe / gpu_spe) if (cpu_spe and gpu_spe) else None
+    n_disp = f"{n_full:,}" if n_full else "~10k"
+    _gx = f"{gpu_x:.1f}" if gpu_x else "?"
+    _cs = f"{cpu_spe:.0f}" if cpu_spe else "?"
+    _gs = f"{gpu_spe:.0f}" if gpu_spe else "?"
     if is_aws:
         title = L("# HOOPS AI 1.1 benchmark (AWS EC2) - CPU vs GPU",
                   "# HOOPS AI 1.1 ベンチマーク (AWS EC2) - CPU vs GPU")
         dataset_line = L(
             "Machine: **AWS g6.8xlarge** (AMD EPYC 16-core + NVIDIA L4). "
-            "Dataset: `mechcad` heavy mechanical-CAD corpus - a 2,000-file "
-            "subset for the Step 1 / Step 3 worker sweeps and the full "
-            "10,873-file corpus for the Step 2 CPU-vs-GPU training run.",
+            f"Dataset: `mechcad` heavy mechanical-CAD corpus - the same full "
+            f"{n_disp}-file corpus is used for the Step 1 worker sweep and the "
+            f"Step 2 CPU-vs-GPU training run.",
             "マシン: **AWS g6.8xlarge**（AMD EPYC 16コア + NVIDIA L4）。"
-            "データセット: `mechcad` ヘビー機械CADコーパス - Step 1 / Step 3 の"
-            "ワーカースイープには2,000ファイルのサブセット、Step 2 の CPU vs GPU "
-            "学習には10,873ファイルの全コーパスを使用。")
+            f"データセット: `mechcad` ヘビー機械CADコーパス - Step 1 の"
+            f"ワーカースイープと Step 2 の CPU vs GPU 学習の両方で、同じ "
+            f"{n_disp}ファイルの全コーパスを使用。")
     else:
         title = L("# HOOPS AI 1.1 benchmark (local Windows) - CPU vs GPU",
                   "# HOOPS AI 1.1 ベンチマーク (ローカル Windows) - CPU vs GPU")
@@ -903,26 +926,26 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
           "place a GPU pays off. Because the model is trained with contrastive "
           "learning, batch_size changes the trained model, so the fair speed "
           "comparison fixes batch_size: at the tutorial default batch_size=64 "
-          "(same model, same 10 epochs), on a **10,873-file heavy dataset** "
-          "(AWS g6.8xlarge, NVIDIA L4) the GPU is about **5.4x faster** than the "
-          "16-core CPU (618 vs 114 s/epoch). The advantage grows with scale - on a "
-          "tiny preflight it was only ~1.7x. Compare on `s/epoch`, not total wall "
-          "(which includes a fixed start-up cost).",
+          "(same model, same 10 epochs), on a "
+          f"**{n_disp}-file heavy dataset** "
+          "(AWS g6.8xlarge, NVIDIA L4) the GPU is about "
+          f"**{_gx}x faster** than the "
+          f"16-core CPU ({_cs} vs {_gs} s/epoch). Compare on `s/epoch`, not total "
+          "wall (which includes a fixed start-up cost).",
           "- **Step 2（学習）が唯一のGPUバウンドな段階**であり、GPUが効果を発揮する"
           "唯一の場所。本モデルは対比学習のため batch_size を変えると学習されるモデル"
           "自体が変わる。したがって公平な速度比較は batch_size を固定して行う："
           "チュートリアル既定の batch_size=64（同一モデル・同一10 epoch）で、"
-          "**10,873ファイルのヘビーデータ**（AWS g6.8xlarge・NVIDIA L4）では "
-          "GPUは16コアCPUの約**5.4倍**高速（618 vs 114 s/epoch）。この優位は規模とともに"
-          "拡大し、小さなプリフライトでは約1.7倍にとどまる。比較は総wall（固定の起動"
-          "コストを含む）ではなく `s/epoch` で行う。"))
+          f"**{n_disp}ファイルのヘビーデータ**（AWS g6.8xlarge・NVIDIA L4）では "
+          f"GPUは16コアCPUの約**{_gx}倍**高速（{_cs} vs {_gs} s/epoch）。"
+          "比較は総wall（固定の起動コストを含む）ではなく `s/epoch` で行う。"))
     else:
         doc.append(L(
           "- **Step 2 (training) is not covered on this machine** - it was "
           "benchmarked separately on the AWS EC2 host (see `REPORT_aws.*`), "
-          "where the L4 GPU is ~5.4x faster than the CPU at 10k scale.",
+          "where the L4 GPU is ~4.9x faster than the CPU at 10k scale.",
           "- **Step 2（学習）はこのマシンでは対象外** - AWS EC2 環境で別途計測した"
-          "（`REPORT_aws.*` を参照）。10kスケールで L4 GPU は CPU の約5.4倍高速。"))
+          "（`REPORT_aws.*` を参照）。10kスケールで L4 GPU は CPU の約4.9倍高速。"))
     doc += [
         L("- _How the tables read:_ within each sweep, speedup is quoted "
           "against the smallest setting measured in that group (lowest worker "
