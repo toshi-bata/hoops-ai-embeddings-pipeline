@@ -682,12 +682,12 @@ def parity_section(rows: list[dict]) -> list[str]:
              else f"各インストールのピーク（CPU max_workers={cpu_pn}、"
                   f"GPU max_workers={gpu_pn}）で")
     out.append(L(
-        f"**Like Step 3, Step 1 is CPU-bound - the GPU install buys nothing.** "
+        f"**Step 1 is CPU-bound - the GPU install buys nothing.** "
         f"{at_en}, CPU {cpu_pt:.1f} s vs GPU {gpu_pt:.1f} s: the GPU install is "
         f"**{cpu_pt / gpu_pt:.2f}x** the CPU throughput"
         + (" - within run-to-run noise, i.e. parity.\n" if close
            else ".\n"),
-        f"**Step 3 と同様、Step 1 もCPUバウンドで、GPUインストールの恩恵はない。** "
+        f"**Step 1 もCPUバウンドで、GPUインストールの恩恵はない。** "
         f"{at_ja}、CPU {cpu_pt:.1f} s vs GPU {gpu_pt:.1f} s: GPUインストールはCPUの "
         f"**{cpu_pt / gpu_pt:.2f}倍** のスループット"
         + ("（実行ごとのノイズの範囲内＝ほぼ同等）。\n" if close else "。\n")))
@@ -717,8 +717,8 @@ def parity_section(rows: list[dict]) -> list[str]:
         ct, gt = cpu[w], gpu[w]
         out.append(L(
             f"Both installs were run at max_workers={w} on the "
-            f"{main_n:,}-file subset:\n",
-            f"{main_n:,}ファイルのサブセットで、両インストールを "
+            f"{main_n:,}-file corpus:\n",
+            f"{main_n:,}ファイルの全コーパスで、両インストールを "
             f"max_workers={w} で実行:\n"))
         out.append(html_table(
             [L("install", "インストール"),
