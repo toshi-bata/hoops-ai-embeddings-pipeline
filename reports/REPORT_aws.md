@@ -1,7 +1,7 @@
 # HOOPS AI 1.1 benchmark (AWS EC2) - CPU vs GPU
 
 Machine: **AWS g6.8xlarge** (AMD EPYC 16-core + NVIDIA L4). Dataset: `mechcad` heavy mechanical-CAD corpus - the same full 10,715-file corpus is used for the Step 1 worker sweep and the Step 2 CPU-vs-GPU training run.
-Benchmark runs: 12 succeeded, 0 failed or skipped. Raw data: `results/results.csv`, per-run logs in `logs/`.
+Benchmark runs: 17 succeeded, 0 failed or skipped. Raw data: `results/results.csv`, per-run logs in `logs/`.
 
 See also the companion report for the other machine (`REPORT_local.*` / `REPORT_aws.*`).
 
@@ -9,7 +9,7 @@ See also the companion report for the other machine (`REPORT_local.*` / `REPORT_
 
 Conclusions first; the supporting numbers and per-setting sweeps follow in each step's section.
 
-- **Step 1 (encoding) and Step 3 (embedding + indexing) are CPU-bound** - the GPU sits idle, so the GPU install buys nothing. Throughput scales with worker count up to roughly the machine's physical core count, then flattens.
+- **Step 1 (encoding) and Step 3 (embedding + indexing) are CPU-bound** - the GPU sits idle, so the GPU install buys nothing. Step 1 throughput scales with worker count up to roughly the machine's physical core count, then flattens; Step 3 peaks at a lower worker count and then *declines* as more workers are added, because its heavier RAM and file-descriptor load makes oversubscription counter-productive.
 - **Step 2 (training) is the only GPU-bound stage** and the only place a GPU pays off. Because the model is trained with contrastive learning, batch_size changes the trained model, so the fair speed comparison fixes batch_size: at the tutorial default batch_size=64 (same model, same 10 epochs), on a **10,715-file heavy dataset** (AWS g6.8xlarge, NVIDIA L4) the GPU is about **4.9x faster** than the 16-core CPU (497 vs 101 s/epoch). Compare on `s/epoch`, not total wall (which includes a fixed start-up cost).
 - _How the tables read:_ within each sweep, speedup is quoted against the smallest setting measured in that group (lowest worker count, or smallest batch size for step 2); parallel efficiency is speedup divided by the ideal linear speedup.
 
@@ -107,7 +107,22 @@ _Speedup = CPU s/epoch / GPU s/epoch = 497.3 / 101.1 = **4.9x**. The GPU also us
 
 ### num_workers scaling
 
-_no data_
+**CPU1.1, n=10715 files** (speedup relative to num_workers=20)
+
+<table>
+<thead><tr><th>num_workers</th><th>time (s)</th><th>files/s</th><th>speedup</th><th>parallel eff.</th><th>peak RSS (MB)</th><th>failed</th></tr></thead>
+<tbody>
+<tr class='peak'><td>20</td><td>4762.8</td><td>2.25</td><td>1.00x</td><td>100%</td><td>32422</td><td>0</td></tr>
+<tr><td>24</td><td>4974.9</td><td>2.15</td><td>0.96x</td><td>80%</td><td>38949</td><td>0</td></tr>
+<tr><td>28</td><td>5056.4</td><td>2.12</td><td>0.94x</td><td>67%</td><td>45960</td><td>0</td></tr>
+<tr><td>32</td><td>5139.8</td><td>2.08</td><td>0.93x</td><td>58%</td><td>55738</td><td>0</td></tr>
+<tr><td>36</td><td>5202.2</td><td>2.06</td><td>0.92x</td><td>51%</td><td>61025</td><td>0</td></tr>
+</tbody></table>
+
+_The **files/s** column counts input CAD files. These 10,715 files expand to **37,548 B-rep shapes** (~3.5 shapes/file - the heavy corpus is full of assemblies), and Step 3 embeds each shape: at the peak that is ~7.9 shapes/s._
+
+
+**Fastest: num_workers = 20** (4762.8 s, 2.25 files/s) - the shortest time in this group.
 
 ## Caveats
 

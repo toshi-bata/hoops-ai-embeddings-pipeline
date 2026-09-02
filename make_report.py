@@ -914,11 +914,16 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
         "",
         L("- **Step 1 (encoding) and Step 3 (embedding + indexing) are "
           "CPU-bound** - the GPU sits idle, so the GPU install buys nothing. "
-          "Throughput scales with worker count up to roughly the machine's "
-          "physical core count, then flattens.",
+          "Step 1 throughput scales with worker count up to roughly the "
+          "machine's physical core count, then flattens; Step 3 peaks at a "
+          "lower worker count and then *declines* as more workers are added, "
+          "because its heavier RAM and file-descriptor load makes oversubscription "
+          "counter-productive.",
           "- **Step 1（エンコード）と Step 3（埋め込み + 索引化）はCPUバウンド** "
-          "— GPUはアイドルで、GPUインストールの恩恵はない。スループットはワーカー数に"
-          "応じて物理コア数付近まで向上し、その後は頭打ち。"),
+          "— GPUはアイドルで、GPUインストールの恩恵はない。Step 1 のスループットは"
+          "ワーカー数に応じて物理コア数付近まで向上し、その後は頭打ち。Step 3 はより"
+          "少ないワーカー数でピークに達し、それ以上増やすと*低下*する — RAM と"
+          "ファイルディスクリプタの負荷が重く、ワーカーの過剰割り当てが逆効果になるため。"),
     ]
     if has_training:
         doc.append(L(
