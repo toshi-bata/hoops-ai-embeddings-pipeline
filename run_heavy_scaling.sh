@@ -60,6 +60,20 @@ cd "$BENCH_DIR" || exit 1
 say() { printf '%s\n' "$*"; }
 rule() { printf '=%.0s' {1..74}; printf '\n'; }
 
+# Step 3 opens many files at once (SIGNAL checkpoint + Zarr chunks + pool pipes,
+# per worker); a many-worker sweep can blow past the default soft nofile limit
+# (often 1024) and die with "Too many open files". Raise it toward the hard
+# limit, mirroring the Xvfb auto-setup below.
+_hard_nofile="$(ulimit -Hn 2>/dev/null || echo 1024)"
+_want_nofile=1048576
+if [[ "$_hard_nofile" == "unlimited" ]]; then
+  ulimit -n "$_want_nofile" 2>/dev/null || true
+elif [[ "$_hard_nofile" =~ ^[0-9]+$ ]] && (( _hard_nofile > 1024 )); then
+  (( _want_nofile > _hard_nofile )) && _want_nofile="$_hard_nofile"
+  ulimit -n "$_want_nofile" 2>/dev/null || true
+fi
+say "[ulimit] open-file soft limit = $(ulimit -Sn)"
+
 # HOOPS AI initialisation needs an X display even for offscreen work.
 XVFB_PID=""
 if [[ -z "${DISPLAY:-}" ]]; then

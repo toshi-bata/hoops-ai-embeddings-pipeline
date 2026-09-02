@@ -82,6 +82,28 @@ runs the CPU/GPU pip installs below automatically):
   display. HOOPS AI needs one even for offscreen work. `run_heavy_batch.sh`
   and `run_heavy_scaling.sh` auto-start `Xvfb :99` if `$DISPLAY` is unset; the
   CDK stack in `cdk/` also installs it as a systemd service.
+- **A raised open-file limit for high `num_workers` on Linux.** Step 3
+  (embedding + indexing) opens many files at once -- each worker holds the
+  SIGNAL checkpoint, its Zarr dataset chunks and the pool's pipes -- so a
+  worker-scaling sweep at 20-40+ workers can exceed the default soft limit of
+  `ulimit -n 1024` and die with `OSError: [Errno 24] Too many open files`
+  (the parent may then hang on its worker pool instead of exiting cleanly).
+  Raise the soft limit before a heavy Step 3 run, in the same shell:
+  ```bash
+  ulimit -n 1048576   # up to the hard limit; check with `ulimit -Hn`
+  ```
+  It is inherited by child processes, so setting it once before the sweep is
+  enough. (Step 1 encoding does not load a model per worker and is not
+  affected.)
+- **`tmux` (or `nohup`) for long remote runs.** A full heavy sweep runs for
+  hours, so run it inside a terminal multiplexer that survives an SSH drop:
+  ```bash
+  tmux new -s bench
+  ulimit -n 1048576
+  ./run_heavy_scaling.sh 2>&1 | tee run.log   # Ctrl-b d to detach
+  tmux attach -t bench                         # re-attach later
+  tail -f run.log                              # or just follow the log
+  ```
 
 ## Quickstart: run the pipeline once, on your own data
 
@@ -243,6 +265,7 @@ comparable, not just fast:
 | step 1/3 throughput is noisy between runs | on Windows, real-time antivirus scanning the STEP files during the run; exclude the corpus and output folders |
 | a sweep runs much slower than the `-DryRun` estimate | the estimate assumes ~34 core-seconds/file until real Phase 1 numbers replace it |
 | headless Linux box hangs or errors on the first CAD file | no X display -- HOOPS AI needs one even offscreen; start `Xvfb :99` and `export DISPLAY=:99` (both heavy-corpus shell scripts do this automatically) |
+| step 3 dies with `OSError: [Errno 24] Too many open files` (or the process appears to hang with idle workers, no output) at high `num_workers` | the default `ulimit -n 1024` soft limit is too low for a many-worker embedding sweep (each worker holds the checkpoint, its Zarr chunks and pool pipes). Raise it in the same shell before the run: `ulimit -n 1048576` (up to `ulimit -Hn`); it is inherited by child processes |
 | step 1 gets stuck repeating `RAM limit reached ... Restarting workers` / `worker still alive after kill attempt` and never progresses | too many `--max-workers` for the RAM actually available; a worker that fails to die stays resident while a replacement is started anyway, so available RAM keeps dropping each restart instead of recovering. Lower `--max-workers` (a handful of files doesn't need 12), check Task Manager / `ps` for leftover worker processes from a previous aborted run before retrying, and close other RAM-heavy applications |
 
 ## Source
