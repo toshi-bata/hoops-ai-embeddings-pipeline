@@ -1,7 +1,7 @@
 # HOOPS AI 1.1 benchmark (AWS EC2) - CPU vs GPU
 
 Machine: **AWS g6.8xlarge** (AMD EPYC 16-core + NVIDIA L4). Dataset: `mechcad` heavy mechanical-CAD corpus - the same full 10,715-file corpus is used for the Step 1 worker sweep and the Step 2 CPU-vs-GPU training run.
-Benchmark runs: 22 succeeded, 0 failed or skipped. Raw data: `results/results.csv`, per-run logs in `logs/`.
+Benchmark runs: 23 succeeded, 0 failed or skipped. Raw data: `results/results.csv`, per-run logs in `logs/`.
 
 See also the companion report for the other machine (`REPORT_local.*` / `REPORT_aws.*`).
 
@@ -130,6 +130,19 @@ _The **files/s** column counts input CAD files. These 10,715 files expand to **3
 **Fastest: num_workers = 12** (3377.6 s, 3.17 files/s) - the shortest time in this group.
 
 Amdahl fit over num_workers=4..36: serial fraction f = **52.6%**, so the asymptotic ceiling is 1.9x no matter how many workers you add. Roughly num_workers = 4 reaches 80% of that ceiling.
+
+### CPU vs GPU
+
+**Step 3 indexing is CPU-bound - the GPU gives no benefit.** At each platform's peak, CPU 3377.6 s (num_workers=12) vs GPU 3282.1 s (num_workers=12): the GPU install is **1.03x** the CPU throughput (i.e. faster). Peak GPU memory was 0 MB in every indexing run - `embed_shape_batch` runs the B-rep encoding on CPU workers, so a GPU adds nothing here.
+
+Matched num_workers, CPU vs GPU:
+
+<table>
+<thead><tr><th>num_workers</th><th>CPU time (s)</th><th>GPU time (s)</th><th>GPU speedup</th></tr></thead>
+<tbody>
+<tr><td>12</td><td class='peak'>3377.6</td><td class='peak'>3282.1</td><td>1.03x</td></tr>
+</tbody></table>
+_Highlighted: each platform's peak (CPU num_workers=12, GPU num_workers=12). GPU speedup = CPU time / GPU time; below 1.00x means the GPU install is slower._
 
 ## Caveats
 

@@ -1,7 +1,7 @@
 # HOOPS AI 1.1 ベンチマーク (AWS EC2) - CPU vs GPU
 
 マシン: **AWS g6.8xlarge**（AMD EPYC 16コア + NVIDIA L4）。データセット: `mechcad` ヘビー機械CADコーパス - Step 1 のワーカースイープと Step 2 の CPU vs GPU 学習の両方で、同じ 10,715ファイルの全コーパスを使用。
-ベンチマーク実行: 成功 22 件、失敗/スキップ 0 件。生データ: `results/results.csv`、各実行ログは `logs/`。
+ベンチマーク実行: 成功 23 件、失敗/スキップ 0 件。生データ: `results/results.csv`、各実行ログは `logs/`。
 
 もう一方のマシンの対になるレポートも参照（`REPORT_local.*` / `REPORT_aws.*`）。
 
@@ -130,6 +130,19 @@ _**ファイル/s** 列は入力CADファイル数を数える。この 10,715 �
 **最速: num_workers = 12**（3377.6 s、3.17 ファイル/s）- このグループで最短。
 
 アムダール則フィット (num_workers=4..36): 直列成分 f = **52.6%**。ワーカーをいくら増やしても 漸近的な上限は 1.9倍。おおよそ num_workers = 4 で その上限の80%に到達する。
+
+### CPU vs GPU
+
+**Step 3 の索引化はCPUバウンドで、GPUの恩恵はない。** 各プラットフォームのピークで、CPU 3377.6 s (num_workers=12) vs GPU 3282.1 s (num_workers=12): GPUインストールはCPUの **1.03倍** のスループット（つまり高速）。索引化の全実行で最大GPUメモリは0 MB - `embed_shape_batch` はB-repエンコードをCPUワーカー上で実行するため、ここではGPUを足しても効果がない。
+
+同一 num_workers でのCPU vs GPU:
+
+<table>
+<thead><tr><th>num_workers</th><th>CPU 時間 (s)</th><th>GPU 時間 (s)</th><th>GPU速度向上</th></tr></thead>
+<tbody>
+<tr><td>12</td><td class='peak'>3377.6</td><td class='peak'>3282.1</td><td>1.03x</td></tr>
+</tbody></table>
+_ハイライト: 各プラットフォームのピーク（CPU num_workers=12、GPU num_workers=12）。GPU速度向上 = CPU時間 / GPU時間。1.00x未満はGPUインストールの方が遅いことを意味する。_
 
 ## 注意事項
 
