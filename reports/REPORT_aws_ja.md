@@ -1,7 +1,7 @@
 # HOOPS AI 1.1 ベンチマーク (AWS EC2) - CPU vs GPU
 
 マシン: **AWS g6.8xlarge**（AMD EPYC 16コア + NVIDIA L4）。データセット: `mechcad` ヘビー機械CADコーパス - Step 1 のワーカースイープと Step 2 の CPU vs GPU 学習の両方で、同じ 10,715ファイルの全コーパスを使用。
-ベンチマーク実行: 成功 17 件、失敗/スキップ 0 件。生データ: `results/results.csv`、各実行ログは `logs/`。
+ベンチマーク実行: 成功 22 件、失敗/スキップ 0 件。生データ: `results/results.csv`、各実行ログは `logs/`。
 
 もう一方のマシンの対になるレポートも参照（`REPORT_local.*` / `REPORT_aws.*`）。
 
@@ -107,22 +107,29 @@ _速度向上 = CPU s/epoch / GPU s/epoch = 497.3 / 101.1 = **4.9倍**。重い�
 
 ### num_workers スケーリング
 
-**CPU1.1, n=10715 files** (基準 num_workers=20)
+**CPU1.1, n=10715 files** (基準 num_workers=4)
 
 <table>
 <thead><tr><th>num_workers</th><th>時間 (s)</th><th>ファイル/s</th><th>速度向上</th><th>並列効率</th><th>最大RSS (MB)</th><th>失敗</th></tr></thead>
 <tbody>
-<tr class='peak'><td>20</td><td>4762.8</td><td>2.25</td><td>1.00x</td><td>100%</td><td>32422</td><td>0</td></tr>
-<tr><td>24</td><td>4974.9</td><td>2.15</td><td>0.96x</td><td>80%</td><td>38949</td><td>0</td></tr>
-<tr><td>28</td><td>5056.4</td><td>2.12</td><td>0.94x</td><td>67%</td><td>45960</td><td>0</td></tr>
-<tr><td>32</td><td>5139.8</td><td>2.08</td><td>0.93x</td><td>58%</td><td>55738</td><td>0</td></tr>
-<tr><td>36</td><td>5202.2</td><td>2.06</td><td>0.92x</td><td>51%</td><td>61025</td><td>0</td></tr>
+<tr><td>4</td><td>6219.5</td><td>1.72</td><td>1.00x</td><td>100%</td><td>7545</td><td>0</td></tr>
+<tr><td>8</td><td>3486.1</td><td>3.07</td><td>1.78x</td><td>89%</td><td>14167</td><td>0</td></tr>
+<tr class='peak'><td>12</td><td>3377.6</td><td>3.17</td><td>1.84x</td><td>61%</td><td>20802</td><td>0</td></tr>
+<tr><td>14</td><td>3432.3</td><td>3.12</td><td>1.81x</td><td>52%</td><td>23866</td><td>0</td></tr>
+<tr><td>16</td><td>4124.8</td><td>2.60</td><td>1.51x</td><td>38%</td><td>28208</td><td>0</td></tr>
+<tr><td>20</td><td>4762.8</td><td>2.25</td><td>1.31x</td><td>26%</td><td>32422</td><td>0</td></tr>
+<tr><td>24</td><td>4974.9</td><td>2.15</td><td>1.25x</td><td>21%</td><td>38949</td><td>0</td></tr>
+<tr><td>28</td><td>5056.4</td><td>2.12</td><td>1.23x</td><td>18%</td><td>45960</td><td>0</td></tr>
+<tr><td>32</td><td>5139.8</td><td>2.08</td><td>1.21x</td><td>15%</td><td>55738</td><td>0</td></tr>
+<tr><td>36</td><td>5202.2</td><td>2.06</td><td>1.20x</td><td>13%</td><td>61025</td><td>0</td></tr>
 </tbody></table>
 
-_**ファイル/s** 列は入力CADファイル数を数える。この 10,715 ファイルは **37,548 個のB-rep形状** に展開され（約3.5 形状/ファイル - ヘビーコーパスはアセンブリが多い）、Step 3 は各形状を埋め込む: ピークでは約7.9 形状/s。_
+_**ファイル/s** 列は入力CADファイル数を数える。この 10,715 ファイルは **37,548 個のB-rep形状** に展開され（約3.5 形状/ファイル - ヘビーコーパスはアセンブリが多い）、Step 3 は各形状を埋め込む: ピークでは約11.1 形状/s。_
 
 
-**最速: num_workers = 20**（4762.8 s、2.25 ファイル/s）- このグループで最短。
+**最速: num_workers = 12**（3377.6 s、3.17 ファイル/s）- このグループで最短。
+
+アムダール則フィット (num_workers=4..36): 直列成分 f = **52.6%**。ワーカーをいくら増やしても 漸近的な上限は 1.9倍。おおよそ num_workers = 4 で その上限の80%に到達する。
 
 ## 注意事項
 

@@ -1,7 +1,7 @@
 # HOOPS AI 1.1 benchmark (AWS EC2) - CPU vs GPU
 
 Machine: **AWS g6.8xlarge** (AMD EPYC 16-core + NVIDIA L4). Dataset: `mechcad` heavy mechanical-CAD corpus - the same full 10,715-file corpus is used for the Step 1 worker sweep and the Step 2 CPU-vs-GPU training run.
-Benchmark runs: 17 succeeded, 0 failed or skipped. Raw data: `results/results.csv`, per-run logs in `logs/`.
+Benchmark runs: 22 succeeded, 0 failed or skipped. Raw data: `results/results.csv`, per-run logs in `logs/`.
 
 See also the companion report for the other machine (`REPORT_local.*` / `REPORT_aws.*`).
 
@@ -107,22 +107,29 @@ _Speedup = CPU s/epoch / GPU s/epoch = 497.3 / 101.1 = **4.9x**. The GPU also us
 
 ### num_workers scaling
 
-**CPU1.1, n=10715 files** (speedup relative to num_workers=20)
+**CPU1.1, n=10715 files** (speedup relative to num_workers=4)
 
 <table>
 <thead><tr><th>num_workers</th><th>time (s)</th><th>files/s</th><th>speedup</th><th>parallel eff.</th><th>peak RSS (MB)</th><th>failed</th></tr></thead>
 <tbody>
-<tr class='peak'><td>20</td><td>4762.8</td><td>2.25</td><td>1.00x</td><td>100%</td><td>32422</td><td>0</td></tr>
-<tr><td>24</td><td>4974.9</td><td>2.15</td><td>0.96x</td><td>80%</td><td>38949</td><td>0</td></tr>
-<tr><td>28</td><td>5056.4</td><td>2.12</td><td>0.94x</td><td>67%</td><td>45960</td><td>0</td></tr>
-<tr><td>32</td><td>5139.8</td><td>2.08</td><td>0.93x</td><td>58%</td><td>55738</td><td>0</td></tr>
-<tr><td>36</td><td>5202.2</td><td>2.06</td><td>0.92x</td><td>51%</td><td>61025</td><td>0</td></tr>
+<tr><td>4</td><td>6219.5</td><td>1.72</td><td>1.00x</td><td>100%</td><td>7545</td><td>0</td></tr>
+<tr><td>8</td><td>3486.1</td><td>3.07</td><td>1.78x</td><td>89%</td><td>14167</td><td>0</td></tr>
+<tr class='peak'><td>12</td><td>3377.6</td><td>3.17</td><td>1.84x</td><td>61%</td><td>20802</td><td>0</td></tr>
+<tr><td>14</td><td>3432.3</td><td>3.12</td><td>1.81x</td><td>52%</td><td>23866</td><td>0</td></tr>
+<tr><td>16</td><td>4124.8</td><td>2.60</td><td>1.51x</td><td>38%</td><td>28208</td><td>0</td></tr>
+<tr><td>20</td><td>4762.8</td><td>2.25</td><td>1.31x</td><td>26%</td><td>32422</td><td>0</td></tr>
+<tr><td>24</td><td>4974.9</td><td>2.15</td><td>1.25x</td><td>21%</td><td>38949</td><td>0</td></tr>
+<tr><td>28</td><td>5056.4</td><td>2.12</td><td>1.23x</td><td>18%</td><td>45960</td><td>0</td></tr>
+<tr><td>32</td><td>5139.8</td><td>2.08</td><td>1.21x</td><td>15%</td><td>55738</td><td>0</td></tr>
+<tr><td>36</td><td>5202.2</td><td>2.06</td><td>1.20x</td><td>13%</td><td>61025</td><td>0</td></tr>
 </tbody></table>
 
-_The **files/s** column counts input CAD files. These 10,715 files expand to **37,548 B-rep shapes** (~3.5 shapes/file - the heavy corpus is full of assemblies), and Step 3 embeds each shape: at the peak that is ~7.9 shapes/s._
+_The **files/s** column counts input CAD files. These 10,715 files expand to **37,548 B-rep shapes** (~3.5 shapes/file - the heavy corpus is full of assemblies), and Step 3 embeds each shape: at the peak that is ~11.1 shapes/s._
 
 
-**Fastest: num_workers = 20** (4762.8 s, 2.25 files/s) - the shortest time in this group.
+**Fastest: num_workers = 12** (3377.6 s, 3.17 files/s) - the shortest time in this group.
+
+Amdahl fit over num_workers=4..36: serial fraction f = **52.6%**, so the asymptotic ceiling is 1.9x no matter how many workers you add. Roughly num_workers = 4 reaches 80% of that ceiling.
 
 ## Caveats
 
