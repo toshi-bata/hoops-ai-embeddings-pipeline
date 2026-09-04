@@ -482,7 +482,7 @@ def training_section(rows: list[dict]) -> list[str]:
              L("train wall (min)", "学習wall (分)"),
              L("peak RSS (MB)", "最大RSS (MB)"),
              L("peak GPU (MB)", "最大GPU (MB)")],
-            table, highlight_first=None))
+            table, highlight_first=L("GPU (NVIDIA L4)", "GPU (NVIDIA L4)")))
         out.append(L(
             f"\n_Speedup = CPU s/epoch / GPU s/epoch = "
             f"{cs:.1f} / {gs:.1f} = **{cs / gs:.1f}x**. The GPU also uses far less "

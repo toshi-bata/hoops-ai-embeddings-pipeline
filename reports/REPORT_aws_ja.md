@@ -89,7 +89,7 @@ Step 1 はCPU上のHOOPS Exchange + numpyであり、torch wheelは無関係の�
 <thead><tr><th>デバイス</th><th>s/epoch</th><th>分/epoch</th><th>学習wall (分)</th><th>最大RSS (MB)</th><th>最大GPU (MB)</th></tr></thead>
 <tbody>
 <tr><td>CPU (EPYC 16コア)</td><td>497.3</td><td>8.29</td><td>82.9</td><td>7299</td><td>-</td></tr>
-<tr><td>GPU (NVIDIA L4)</td><td>101.1</td><td>1.68</td><td>16.8</td><td>2553</td><td>6180</td></tr>
+<tr class='peak'><td>GPU (NVIDIA L4)</td><td>101.1</td><td>1.68</td><td>16.8</td><td>2553</td><td>6180</td></tr>
 </tbody></table>
 
 _速度向上 = CPU s/epoch / GPU s/epoch = 497.3 / 101.1 = **4.9倍**。重いテンソル演算がデバイス側で動くため、GPUはホストRAM（最大RSS）も大幅に少ない。

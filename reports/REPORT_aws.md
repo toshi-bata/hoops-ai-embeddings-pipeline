@@ -89,7 +89,7 @@ Ran on **AWS g6.8xlarge** (AMD EPYC, 16 physical cores + **NVIDIA L4** GPU) agai
 <thead><tr><th>device</th><th>s/epoch</th><th>min/epoch</th><th>train wall (min)</th><th>peak RSS (MB)</th><th>peak GPU (MB)</th></tr></thead>
 <tbody>
 <tr><td>CPU (EPYC 16-core)</td><td>497.3</td><td>8.29</td><td>82.9</td><td>7299</td><td>-</td></tr>
-<tr><td>GPU (NVIDIA L4)</td><td>101.1</td><td>1.68</td><td>16.8</td><td>2553</td><td>6180</td></tr>
+<tr class='peak'><td>GPU (NVIDIA L4)</td><td>101.1</td><td>1.68</td><td>16.8</td><td>2553</td><td>6180</td></tr>
 </tbody></table>
 
 _Speedup = CPU s/epoch / GPU s/epoch = 497.3 / 101.1 = **4.9x**. The GPU also uses far less host RAM (peak RSS) because the heavy tensor work lives on the device.
