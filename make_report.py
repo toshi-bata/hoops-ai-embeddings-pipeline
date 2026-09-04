@@ -877,12 +877,16 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
         dataset_line = L(
             "Machine: **AWS g6.8xlarge** (AMD EPYC 16-core + NVIDIA L4). "
             f"Dataset: `mechcad` heavy mechanical-CAD corpus - the same full "
-            f"{n_disp}-file corpus is used for the Step 1 worker sweep and the "
-            f"Step 2 CPU-vs-GPU training run.",
+            f"{n_disp}-file corpus is used for the Step 1 worker sweep, the "
+            f"Step 2 CPU-vs-GPU training run, and the Step 3 embedding + FAISS "
+            f"indexing (using the tutorial's pretrained model "
+            f"`ts3d_2M_hoops_embeddings_SIGNAL-preview.ckpt`).",
             "マシン: **AWS g6.8xlarge**（AMD EPYC 16コア + NVIDIA L4）。"
             f"データセット: `mechcad` ヘビー機械CADコーパス - Step 1 の"
-            f"ワーカースイープと Step 2 の CPU vs GPU 学習の両方で、同じ "
-            f"{n_disp}ファイルの全コーパスを使用。")
+            f"ワーカースイープ、Step 2 の CPU vs GPU 学習、そして Step 3 の"
+            f"埋め込み + FAISS索引化（チュートリアルの事前学習モデル "
+            f"`ts3d_2M_hoops_embeddings_SIGNAL-preview.ckpt` を使用）のすべてで、"
+            f"同じ{n_disp}ファイルの全コーパスを使用。")
     else:
         title = L("# HOOPS AI 1.1 benchmark (local Windows) - CPU vs GPU",
                   "# HOOPS AI 1.1 ベンチマーク (ローカル Windows) - CPU vs GPU")

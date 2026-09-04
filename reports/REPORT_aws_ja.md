@@ -1,6 +1,6 @@
 # HOOPS AI 1.1 ベンチマーク (AWS EC2) - CPU vs GPU
 
-マシン: **AWS g6.8xlarge**（AMD EPYC 16コア + NVIDIA L4）。データセット: `mechcad` ヘビー機械CADコーパス - Step 1 のワーカースイープと Step 2 の CPU vs GPU 学習の両方で、同じ 10,715ファイルの全コーパスを使用。
+マシン: **AWS g6.8xlarge**（AMD EPYC 16コア + NVIDIA L4）。データセット: `mechcad` ヘビー機械CADコーパス - Step 1 のワーカースイープ、Step 2 の CPU vs GPU 学習、そして Step 3 の埋め込み + FAISS索引化（チュートリアルの事前学習モデル `ts3d_2M_hoops_embeddings_SIGNAL-preview.ckpt` を使用）のすべてで、同じ10,715ファイルの全コーパスを使用。
 ベンチマーク実行: 成功 23 件、失敗/スキップ 0 件。生データ: `results/results.csv`、各実行ログは `logs/`。
 
 もう一方のマシンの対になるレポートも参照（`REPORT_local.*` / `REPORT_aws.*`）。

@@ -1,6 +1,6 @@
 # HOOPS AI 1.1 benchmark (AWS EC2) - CPU vs GPU
 
-Machine: **AWS g6.8xlarge** (AMD EPYC 16-core + NVIDIA L4). Dataset: `mechcad` heavy mechanical-CAD corpus - the same full 10,715-file corpus is used for the Step 1 worker sweep and the Step 2 CPU-vs-GPU training run.
+Machine: **AWS g6.8xlarge** (AMD EPYC 16-core + NVIDIA L4). Dataset: `mechcad` heavy mechanical-CAD corpus - the same full 10,715-file corpus is used for the Step 1 worker sweep, the Step 2 CPU-vs-GPU training run, and the Step 3 embedding + FAISS indexing (using the tutorial's pretrained model `ts3d_2M_hoops_embeddings_SIGNAL-preview.ckpt`).
 Benchmark runs: 23 succeeded, 0 failed or skipped. Raw data: `results/results.csv`, per-run logs in `logs/`.
 
 See also the companion report for the other machine (`REPORT_local.*` / `REPORT_aws.*`).
