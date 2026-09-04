@@ -61,15 +61,14 @@ Step 1 はCPU上のHOOPS Exchange + numpyであり、torch wheelは無関係の�
 
 **Step 1 もCPUバウンドで、GPUインストールの恩恵はない。** max_workers=32 で、CPU 1495.6 s vs GPU 1483.5 s: GPUインストールはCPUの **1.01倍** のスループット（実行ごとのノイズの範囲内＝ほぼ同等）。
 
-10,715ファイルの全コーパスで、両インストールを max_workers=32 で実行:
+同一 max_workers でのCPU vs GPU（10,715ファイルの全コーパスで両インストールを max_workers=32 で実行）:
 
 <table>
-<thead><tr><th>インストール</th><th>エンコード時間 (s)</th><th>ファイル/s</th></tr></thead>
+<thead><tr><th>max_workers</th><th>CPU 時間 (s)</th><th>GPU 時間 (s)</th><th>GPU速度向上</th></tr></thead>
 <tbody>
-<tr><td>CPU1.1</td><td>1495.6</td><td>7.16</td></tr>
-<tr><td>GPU1.1</td><td>1483.5</td><td>7.22</td></tr>
+<tr><td>32</td><td class='peak'>1495.6</td><td class='peak'>1483.5</td><td>1.01x</td></tr>
 </tbody></table>
-エンコードはGPUを一切使わないため、GPUインストールでも速くも遅くもならない。
+_ハイライト: max_workers=32 の両インストール — エンコードはGPUを一切使わないため、両者は実行ごとのノイズの範囲内（ほぼ同等）。GPU速度向上 = CPU時間 / GPU時間。_
 
 ## Step 2 - 学習
 

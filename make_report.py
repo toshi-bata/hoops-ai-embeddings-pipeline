@@ -717,26 +717,30 @@ def parity_section(rows: list[dict]) -> list[str]:
             "GPU速度向上 = CPU時間 / GPU時間。1.00x付近はこのCPUバウンド段階で"
             "両インストールが同等であることを意味する。_\n"))
     elif common:
-        # Single shared worker count (the AWS parity point): a compact 2-row
-        # install table is clearer than a one-cell matched table.
+        # Single shared worker count (the AWS parity point). Render it in the
+        # same side-by-side matched layout as the Step 3 CPU-vs-GPU table, and
+        # since the two installs are within run-to-run noise here, highlight
+        # BOTH the CPU and GPU time cells (parity, not a single winner).
         w = w_cmp
         ct, gt = cpu[w], gpu[w]
+        mt = [[w, f"{ct:.1f}", f"{gt:.1f}", f"{ct / gt:.2f}x"]]
+        marks = [(0, 1), (0, 2)]
         out.append(L(
-            f"Both installs were run at max_workers={w} on the "
-            f"{main_n:,}-file corpus:\n",
-            f"{main_n:,}ファイルの全コーパスで、両インストールを "
-            f"max_workers={w} で実行:\n"))
-        out.append(html_table(
-            [L("install", "インストール"),
-             L("encode time (s)", "エンコード時間 (s)"),
-             L("files/s", "ファイル/s")],
-            [["CPU1.1", f"{ct:.1f}", f"{main_n / ct:.2f}"],
-             ["GPU1.1", f"{gt:.1f}", f"{main_n / gt:.2f}"]]))
+            f"Matched max_workers, CPU vs GPU (both installs run at "
+            f"max_workers={w} on the {main_n:,}-file corpus):\n",
+            f"同一 max_workers でのCPU vs GPU（{main_n:,}ファイルの全コーパスで"
+            f"両インストールを max_workers={w} で実行）:\n"))
+        out.append(html_cell_table(
+            ["max_workers", L("CPU time (s)", "CPU 時間 (s)"),
+             L("GPU time (s)", "GPU 時間 (s)"),
+             L("GPU speedup", "GPU速度向上")], mt, marks))
         out.append(L(
-            "The GPU install is neither faster nor slower because the encoding "
-            "never touches the GPU.\n",
-            "エンコードはGPUを一切使わないため、GPUインストールでも速くも遅くも"
-            "ならない。\n"))
+            f"_Highlighted: both installs at max_workers={w} - the encoding "
+            f"never touches the GPU, so the two are within run-to-run noise "
+            f"(parity). GPU speedup = CPU time / GPU time._\n",
+            f"_ハイライト: max_workers={w} の両インストール — エンコードはGPUを"
+            f"一切使わないため、両者は実行ごとのノイズの範囲内（ほぼ同等）。"
+            f"GPU速度向上 = CPU時間 / GPU時間。_\n"))
     # GPU-idle evidence: sampled during the local 500-part GPU sweep, so only
     # attach it to that scale's report (not the AWS heavy run).
     gpu_util = RES / "step1_gpu_util.json"

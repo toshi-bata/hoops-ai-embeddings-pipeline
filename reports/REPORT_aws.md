@@ -61,15 +61,14 @@ Step 1 is HOOPS Exchange + numpy on the CPU; the torch wheel should be irrelevan
 
 **Step 1 is CPU-bound - the GPU install buys nothing.** At max_workers=32, CPU 1495.6 s vs GPU 1483.5 s: the GPU install is **1.01x** the CPU throughput - within run-to-run noise, i.e. parity.
 
-Both installs were run at max_workers=32 on the 10,715-file corpus:
+Matched max_workers, CPU vs GPU (both installs run at max_workers=32 on the 10,715-file corpus):
 
 <table>
-<thead><tr><th>install</th><th>encode time (s)</th><th>files/s</th></tr></thead>
+<thead><tr><th>max_workers</th><th>CPU time (s)</th><th>GPU time (s)</th><th>GPU speedup</th></tr></thead>
 <tbody>
-<tr><td>CPU1.1</td><td>1495.6</td><td>7.16</td></tr>
-<tr><td>GPU1.1</td><td>1483.5</td><td>7.22</td></tr>
+<tr><td>32</td><td class='peak'>1495.6</td><td class='peak'>1483.5</td><td>1.01x</td></tr>
 </tbody></table>
-The GPU install is neither faster nor slower because the encoding never touches the GPU.
+_Highlighted: both installs at max_workers=32 - the encoding never touches the GPU, so the two are within run-to-run noise (parity). GPU speedup = CPU time / GPU time._
 
 ## Step 2 - training
 
