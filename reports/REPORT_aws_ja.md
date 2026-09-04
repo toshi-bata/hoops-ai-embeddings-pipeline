@@ -57,7 +57,7 @@
 
 ### CPU vs GPU（venvは影響するか？）
 
-**Step 1 もCPUバウンドで、GPUインストールの恩恵はない。** max_workers=32 で、CPU 1495.6 s vs GPU 1483.5 s: GPUインストールはCPUの **1.01倍** のスループット（実行ごとのノイズの範囲内＝ほぼ同等）。エンコードはCPUワーカー上のHOOPS Exchange + numpyで、モデルの順伝播を一切行わないためtorch wheelは無関係。このパリティこそが Step 2/3 の CPU vs GPU 比較の妥当性を担保する — 両インストールはデバイス依存の段階以外はすべて同一である。
+**Step 1 はCPUバウンドで、GPUインストールの恩恵はない。** max_workers=32 で、CPU 1495.6 s vs GPU 1483.5 s: GPUインストールはCPUの **1.01倍** のスループット（実行ごとのノイズの範囲内＝ほぼ同等）。エンコードはCPUワーカー上のHOOPS Exchange + numpyで、モデルの順伝播を一切行わないためtorch wheelは無関係。このパリティこそが Step 2/3 の CPU vs GPU 比較の妥当性を担保する — 両インストールはデバイス依存の段階以外はすべて同一である。
 
 同一 max_workers でのCPU vs GPU（10,715ファイルの全コーパスで両インストールを max_workers=32 で実行）:
 
@@ -128,7 +128,7 @@ _**ファイル/s** 列は入力CADファイル数を数える。この 10,715 �
 
 ### CPU vs GPU
 
-**Step 3 の索引化はCPUバウンドで、GPUの恩恵はない。** 各プラットフォームのピークで、CPU 3377.6 s (num_workers=12) vs GPU 3282.1 s (num_workers=12): GPUインストールはCPUの **1.03倍** のスループット（つまり高速）。索引化の全実行で最大GPUメモリは0 MB - `embed_shape_batch` はB-repエンコードをCPUワーカー上で実行するため、ここではGPUを足しても効果がない。
+**Step 3 の索引化もCPUバウンドで、GPUの恩恵はない。** 各プラットフォームのピークで、CPU 3377.6 s (num_workers=12) vs GPU 3282.1 s (num_workers=12): GPUインストールはCPUの **1.03倍** のスループット（つまり高速）。索引化の全実行で最大GPUメモリは0 MB - `embed_shape_batch` はB-repエンコードをCPUワーカー上で実行するため、ここではGPUを足しても効果がない。
 
 同一 num_workers でのCPU vs GPU:
 

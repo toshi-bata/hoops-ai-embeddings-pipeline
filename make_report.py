@@ -590,7 +590,7 @@ def step3_cpu_gpu_section(rows: list[dict]) -> list[str]:
         + ("Peak GPU memory was 0 MB in every indexing run - "
            "`embed_shape_batch` runs the B-rep encoding on CPU workers, so a "
            "GPU adds nothing here.\n" if gpu_zero else "\n"),
-        f"**Step 3 の索引化はCPUバウンドで、GPUの恩恵はない。** 各プラットフォームの"
+        f"**Step 3 の索引化もCPUバウンドで、GPUの恩恵はない。** 各プラットフォームの"
         f"ピークで、CPU {cpu_pt:.1f} s (num_workers={cpu_pn}) vs GPU "
         f"{gpu_pt:.1f} s (num_workers={gpu_pn}): GPUインストールはCPUの "
         f"**{cpu_pt / gpu_pt:.2f}倍** のスループット（つまり{faster}）。"
@@ -689,7 +689,7 @@ def parity_section(rows: list[dict]) -> list[str]:
         "model forward pass, so the torch wheel is irrelevant. That parity is "
         "exactly what licenses the Step 2/3 CPU-vs-GPU comparisons: the two "
         "installs are identical everywhere except the device-bound stages.\n",
-        f"**Step 1 もCPUバウンドで、GPUインストールの恩恵はない。** "
+        f"**Step 1 はCPUバウンドで、GPUインストールの恩恵はない。** "
         f"{at_ja}、CPU {cpu_pt:.1f} s vs GPU {gpu_pt:.1f} s: GPUインストールはCPUの "
         f"**{cpu_pt / gpu_pt:.2f}倍** のスループット"
         + ("（実行ごとのノイズの範囲内＝ほぼ同等）。" if close else "。")
