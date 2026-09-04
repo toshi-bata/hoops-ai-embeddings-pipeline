@@ -671,14 +671,7 @@ def parity_section(rows: list[dict]) -> list[str]:
         gpu_pn = min(gpu, key=lambda n: gpu[n])
         cpu_pt, gpu_pt = cpu[cpu_pn], gpu[gpu_pn]
 
-    out = [f"### {L('Encoding: does the venv matter?', 'エンコード: venvは影響するか？')}\n",
-           L("Step 1 is HOOPS Exchange + numpy on the CPU; the torch wheel should "
-             "be irrelevant. Matching numbers below confirm the two installs are "
-             "otherwise equivalent, which is what licenses the step 2/3 "
-             "comparisons.\n",
-             "Step 1 はCPU上のHOOPS Exchange + numpyであり、torch wheelは無関係のはず。"
-             "以下の数値が一致すれば両インストールがそれ以外は同等であることが確認でき、"
-             "Step 2/3 の比較の妥当性を担保する。\n")]
+    out = [f"### {L('CPU vs GPU (does the venv matter?)', 'CPU vs GPU（venvは影響するか？）')}\n"]
 
     close = abs(cpu_pt - gpu_pt) / max(cpu_pt, gpu_pt) < 0.05
     at_en = (f"At max_workers={cpu_pn}" if common
@@ -691,12 +684,19 @@ def parity_section(rows: list[dict]) -> list[str]:
         f"**Step 1 is CPU-bound - the GPU install buys nothing.** "
         f"{at_en}, CPU {cpu_pt:.1f} s vs GPU {gpu_pt:.1f} s: the GPU install is "
         f"**{cpu_pt / gpu_pt:.2f}x** the CPU throughput"
-        + (" - within run-to-run noise, i.e. parity.\n" if close
-           else ".\n"),
+        + (" - within run-to-run noise, i.e. parity. " if close else ". ")
+        + "Encoding is HOOPS Exchange + numpy on the CPU workers and never runs a "
+        "model forward pass, so the torch wheel is irrelevant. That parity is "
+        "exactly what licenses the Step 2/3 CPU-vs-GPU comparisons: the two "
+        "installs are identical everywhere except the device-bound stages.\n",
         f"**Step 1 もCPUバウンドで、GPUインストールの恩恵はない。** "
         f"{at_ja}、CPU {cpu_pt:.1f} s vs GPU {gpu_pt:.1f} s: GPUインストールはCPUの "
         f"**{cpu_pt / gpu_pt:.2f}倍** のスループット"
-        + ("（実行ごとのノイズの範囲内＝ほぼ同等）。\n" if close else "。\n")))
+        + ("（実行ごとのノイズの範囲内＝ほぼ同等）。" if close else "。")
+        + "エンコードはCPUワーカー上のHOOPS Exchange + numpyで、モデルの順伝播を"
+        "一切行わないためtorch wheelは無関係。このパリティこそが Step 2/3 の "
+        "CPU vs GPU 比較の妥当性を担保する — 両インストールはデバイス依存の"
+        "段階以外はすべて同一である。\n"))
 
     if len(common) >= 3:
         mt = [[n, f"{cpu[n]:.1f}", f"{gpu[n]:.1f}", f"{cpu[n] / gpu[n]:.2f}x"]

@@ -55,11 +55,9 @@
 
 アムダール則フィット (max_workers=8..40): 直列成分 f = **6.5%**。ワーカーをいくら増やしても 漸近的な上限は 15.4倍。おおよそ max_workers = 58 で その上限の80%に到達する。
 
-### エンコード: venvは影響するか？
+### CPU vs GPU（venvは影響するか？）
 
-Step 1 はCPU上のHOOPS Exchange + numpyであり、torch wheelは無関係のはず。以下の数値が一致すれば両インストールがそれ以外は同等であることが確認でき、Step 2/3 の比較の妥当性を担保する。
-
-**Step 1 もCPUバウンドで、GPUインストールの恩恵はない。** max_workers=32 で、CPU 1495.6 s vs GPU 1483.5 s: GPUインストールはCPUの **1.01倍** のスループット（実行ごとのノイズの範囲内＝ほぼ同等）。
+**Step 1 もCPUバウンドで、GPUインストールの恩恵はない。** max_workers=32 で、CPU 1495.6 s vs GPU 1483.5 s: GPUインストールはCPUの **1.01倍** のスループット（実行ごとのノイズの範囲内＝ほぼ同等）。エンコードはCPUワーカー上のHOOPS Exchange + numpyで、モデルの順伝播を一切行わないためtorch wheelは無関係。このパリティこそが Step 2/3 の CPU vs GPU 比較の妥当性を担保する — 両インストールはデバイス依存の段階以外はすべて同一である。
 
 同一 max_workers でのCPU vs GPU（10,715ファイルの全コーパスで両インストールを max_workers=32 で実行）:
 

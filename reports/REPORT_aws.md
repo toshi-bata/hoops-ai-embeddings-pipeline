@@ -55,11 +55,9 @@ Heavy-scale host: the ~10k-file Step 1 worker sweep and the Step 2 CPU-vs-GPU tr
 
 Amdahl fit over max_workers=8..40: serial fraction f = **6.5%**, so the asymptotic ceiling is 15.4x no matter how many workers you add. Roughly max_workers = 58 reaches 80% of that ceiling.
 
-### Encoding: does the venv matter?
+### CPU vs GPU (does the venv matter?)
 
-Step 1 is HOOPS Exchange + numpy on the CPU; the torch wheel should be irrelevant. Matching numbers below confirm the two installs are otherwise equivalent, which is what licenses the step 2/3 comparisons.
-
-**Step 1 is CPU-bound - the GPU install buys nothing.** At max_workers=32, CPU 1495.6 s vs GPU 1483.5 s: the GPU install is **1.01x** the CPU throughput - within run-to-run noise, i.e. parity.
+**Step 1 is CPU-bound - the GPU install buys nothing.** At max_workers=32, CPU 1495.6 s vs GPU 1483.5 s: the GPU install is **1.01x** the CPU throughput - within run-to-run noise, i.e. parity. Encoding is HOOPS Exchange + numpy on the CPU workers and never runs a model forward pass, so the torch wheel is irrelevant. That parity is exactly what licenses the Step 2/3 CPU-vs-GPU comparisons: the two installs are identical everywhere except the device-bound stages.
 
 Matched max_workers, CPU vs GPU (both installs run at max_workers=32 on the 10,715-file corpus):
 
