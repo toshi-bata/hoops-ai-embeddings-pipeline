@@ -55,8 +55,6 @@ Heavy-scale host: the ~10k-file Step 1 worker sweep and the Step 2 CPU-vs-GPU tr
 
 Amdahl fit over max_workers=8..40: serial fraction f = **6.5%**, so the asymptotic ceiling is 15.4x no matter how many workers you add. Roughly max_workers = 58 reaches 80% of that ceiling.
 
-> **The exact peak worker count is run-to-run noise, not a stable optimum.** Across repeated full sweeps the fastest max_workers has moved between 12 and 14 on CPU and between 10 and 12 on GPU, while every point from roughly the physical-core count upward stays within ~5% of the best. Read this as a flat plateau near the core count, not a single best value - do not tune the exact peak.
-
 ### Encoding: does the venv matter?
 
 Step 1 is HOOPS Exchange + numpy on the CPU; the torch wheel should be irrelevant. Matching numbers below confirm the two installs are otherwise equivalent, which is what licenses the step 2/3 comparisons.

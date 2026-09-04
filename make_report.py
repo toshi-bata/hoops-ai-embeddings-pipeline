@@ -202,7 +202,7 @@ def env_cores(env_tag: str) -> tuple[int, int] | None:
 
 
 def worker_scaling_section(rows: list[dict], step: str, param: str,
-                           title: str) -> list[str]:
+                           title: str, scope: str = "") -> list[str]:
     # generate_images=True is a different workload; it must not sit in the
     # scaling table next to the plain runs at the same worker count.
     sel = [r for r in rows
@@ -325,7 +325,13 @@ def worker_scaling_section(rows: list[dict], step: str, param: str,
                 f"漸近的な上限は {max_speedup:.1f}倍。おおよそ {param} = {n80:.0f} で "
                 f"その上限の80%に到達する。"))
         out.append("")
-    if step == "dataprep":
+    if step == "dataprep" and scope != "aws":
+        # This "peak is noise, read it as a plateau" caveat comes from the
+        # local Windows sweeps, where thermal throttling and other running
+        # apps moved the fastest max_workers around (CPU 12-14, GPU 10-12).
+        # The dedicated AWS VM runs this task alone, so its Step 1 sweep is a
+        # clean monotonic curve peaking at the logical-core count - the caveat
+        # does not apply there and would contradict the measured peak.
         out.append(L(
             "> **The exact peak worker count is run-to-run noise, not a stable "
             "optimum.** Across repeated full sweeps the fastest max_workers has "
@@ -972,14 +978,16 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
     doc += env_section(scope)
     doc += [L("## Step 1 - CAD encoding (DataPrep)", "## Step 1 - CADエンコード (DataPrep)"), ""]
     doc += worker_scaling_section(rows, "dataprep", "max_workers",
-                                  L("max_workers scaling", "max_workers スケーリング"))
+                                  L("max_workers scaling", "max_workers スケーリング"),
+                                  scope)
     doc += parity_section(rows)
     if has_training:
         doc += [L("## Step 2 - training", "## Step 2 - 学習"), ""]
         doc += training_section(rows)
     doc += [L("## Step 3 - embedding + FAISS indexing", "## Step 3 - 埋め込み + FAISS索引化"), ""]
     doc += worker_scaling_section(rows, "indexing", "num_workers",
-                                  L("num_workers scaling", "num_workers スケーリング"))
+                                  L("num_workers scaling", "num_workers スケーリング"),
+                                  scope)
     doc += step3_cpu_gpu_section(rows)
 
     # image-generation overhead
