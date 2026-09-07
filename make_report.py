@@ -260,6 +260,77 @@ def worker_scaling_chart(param: str, pts: list[tuple[int, float]],
             f'style="max-width:100%;height:auto">\n')
 
 
+def step1_encode_at(rows: list[dict], env_tag: str, workers: int) -> float | None:
+    """Step 1 (dataprep) encode wall time for a given install at a given
+    max_workers, excluding the generate_images variant."""
+    for r in rows:
+        if (r["step"] == "dataprep" and r["env_tag"] == env_tag
+                and not (r.get("extra_d") or {}).get("gen_images")):
+            try:
+                if int(float(r["param_value"])) == workers:
+                    return encode_seconds(r)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def cpu_gpu_stacked_chart(step1: tuple[float, float], step2: tuple[float, float],
+                          title: str) -> str:
+    """Two stacked bars (CPU vs GPU), each stacking Step 1 (encode) and Step 2
+    (train) wall time, embedded as a base64 PNG data URI so the report stays a
+    single self-contained file."""
+    import io
+    import base64
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.font_manager as fm
+
+    if LANG == "ja":
+        available = {f.name for f in fm.fontManager.ttflist}
+        for cand in ("Yu Gothic", "Meiryo", "MS Gothic", "Noto Sans CJK JP",
+                     "Noto Sans JP", "IPAexGothic", "TakaoGothic"):
+            if cand in available:
+                plt.rcParams["font.family"] = cand
+                break
+    plt.rcParams["axes.unicode_minus"] = False
+
+    labels = [L("CPU (EPYC 16-core)", "CPU (EPYC 16コア)"),
+              L("GPU (NVIDIA L4)", "GPU (NVIDIA L4)")]
+    s1 = list(step1)
+    s2 = list(step2)
+    s1_lbl = L("Step 1: encode (max_workers=32)", "Step 1: エンコード (max_workers=32)")
+    s2_lbl = L("Step 2: train (10 epochs)", "Step 2: 学習 (10 epoch)")
+    c1, c2 = "#4c78a8", "#f58518"
+
+    fig, ax = plt.subplots(figsize=(6.4, 4.8))
+    ax.bar(labels, s1, width=0.55, color=c1, label=s1_lbl)
+    ax.bar(labels, s2, width=0.55, bottom=s1, color=c2, label=s2_lbl)
+    ax.set_ylabel(L("wall time (s)", "実時間 (s)"))
+    ax.set_title(title, fontsize=10)
+    ax.legend(fontsize=9, loc="upper right")
+
+    for i in range(len(labels)):
+        if s1[i]:
+            ax.text(i, s1[i] / 2, f"{s1[i]:,.0f} s", ha="center", va="center",
+                    color="white", fontsize=9)
+        if s2[i]:
+            ax.text(i, s1[i] + s2[i] / 2, f"{s2[i]:,.0f} s", ha="center",
+                    va="center", color="white", fontsize=9)
+        total = s1[i] + s2[i]
+        ax.text(i, total, f"{total:,.0f} s", ha="center", va="bottom",
+                fontsize=10, fontweight="bold")
+
+    ax.margins(y=0.14)
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=110)
+    plt.close(fig)
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    return (f'\n<img alt="{title}" src="data:image/png;base64,{b64}" '
+            f'style="max-width:100%;height:auto">\n')
+
+
 def worker_scaling_section(rows: list[dict], step: str, param: str,
                            title: str, scope: str = "") -> list[str]:
     # generate_images=True is a different workload; it must not sit in the
@@ -555,6 +626,36 @@ def training_section(rows: list[dict]) -> list[str]:
             f"{cs:.1f} / {gs:.1f} = **{cs / gs:.1f}倍**。重いテンソル演算がデバイス側で"
             f"動くため、GPUはホストRAM（最大RSS）も大幅に少ない。\n"))
         out.append("")
+
+        # ---- Step 1 + Step 2 total: stacked bar (encode + train) ----
+        s1_cpu = step1_encode_at(rows, "cpu1.1", 32)
+        s1_gpu = step1_encode_at(rows, "gpu1.1", 32)
+        tw_cpu = (cpu_full.get("sub_timings_d") or {}).get("train_s") if cpu_full else None
+        tw_gpu = (gpu_full.get("sub_timings_d") or {}).get("train_s") if gpu_full else None
+        if s1_cpu and s1_gpu and tw_cpu and tw_gpu:
+            tot_cpu, tot_gpu = s1_cpu + tw_cpu, s1_gpu + tw_gpu
+            out.append(f"#### {L('Training pipeline total - Step 1 + Step 2 (CPU vs GPU)', '学習パイプライン合計 - Step 1 + Step 2（CPU vs GPU）')}\n")
+            out.append(L(
+                f"The full training pipeline is **encode (Step 1) + train "
+                f"(Step 2)**. Stacking both stages at max_workers=32 for Step 1 "
+                f"and 10 epochs for Step 2, the CPU pipeline totals "
+                f"**{tot_cpu:,.0f} s** vs the GPU's **{tot_gpu:,.0f} s** "
+                f"(**{tot_cpu / tot_gpu:.1f}x** faster end-to-end). Step 1 is "
+                f"device-independent (CPU {s1_cpu:,.0f} vs GPU {s1_gpu:,.0f} s), "
+                f"so the entire gap comes from Step 2 training "
+                f"(CPU {tw_cpu:,.0f} vs GPU {tw_gpu:,.0f} s).\n",
+                f"学習パイプライン全体は **エンコード（Step 1）+ 学習（Step 2）**。"
+                f"Step 1 は max_workers=32、Step 2 は 10 epoch で両段階を積み上げると、"
+                f"CPU の合計は **{tot_cpu:,.0f} 秒**、GPU は **{tot_gpu:,.0f} 秒**"
+                f"（エンドツーエンドで **{tot_cpu / tot_gpu:.1f}倍** 高速）。Step 1 は"
+                f"デバイス非依存（CPU {s1_cpu:,.0f} vs GPU {s1_gpu:,.0f} 秒）なので、"
+                f"差はすべて Step 2 の学習に由来する"
+                f"（CPU {tw_cpu:,.0f} vs GPU {tw_gpu:,.0f} 秒）。\n"))
+            out.append(cpu_gpu_stacked_chart(
+                (s1_cpu, s1_gpu), (tw_cpu, tw_gpu),
+                L("Step 1 + Step 2 total wall time (CPU vs GPU)",
+                  "Step 1 + Step 2 合計実時間（CPU vs GPU）")))
+            out.append("")
 
     # ---- scale effect: preflight vs full ----
     if n_pre:
