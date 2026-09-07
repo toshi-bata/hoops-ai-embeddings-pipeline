@@ -48,6 +48,42 @@ HOOPS AI embeddingsの3ステップパイプライン(encode / train / index)を
 
 結果を`-c allowedSshCidr=<自分のIP>/32`として使う。
 
+### 初回セットアップ: AWSプロファイルを作成する(マシンごとに1回)
+
+AWS CLIのプロファイルは**各マシンの**`~/.aws/`に保存され、コンピュータ間で共有
+されない。このマシンでAWSを一度も設定したことがない場合(例: 新しい自宅PC)は、
+下記のデプロイ手順の前にプロファイルを作成する必要がある。後述の`aws sso login`は
+既存プロファイルを*更新*するだけで、プロファイルを*作成*はしない。
+
+組織がIAM Identity Center(SSO)を使っている場合は、対話形式でプロファイルを作成する:
+
+```powershell
+aws configure sso
+```
+
+プロンプトに答える(値は管理者から入手するか、既に動作しているマシンの
+`~/.aws/config`からコピーする):
+
+| プロンプト | 例 / 備考 |
+|---|---|
+| `SSO session name` | 任意のラベル。例: `hai` |
+| `SSO start URL` | 組織のURL。例: `https://xxxx.awsapps.com/start` |
+| `SSO region` | SSOをホストするリージョン。例: `ap-northeast-1` |
+| `SSO registration scopes` | Enterでデフォルト(`sso:account:access`) |
+| (ブラウザが開く) | ログインを承認 |
+| `CLI default client Region` | `ap-northeast-1` |
+| `CLI default output format` | `json` |
+| `CLI profile name` | 以降で使うプロファイル名。例: `hai` |
+
+SSOではなく長期のIAMアクセスキーを使う場合は、`aws configure`(`sso`なし)を実行し、
+Access Key ID / Secret Access Keyを貼り付ける。
+
+続行する前に、プロファイルが解決できることを確認する:
+
+```powershell
+aws sts get-caller-identity --profile <your-profile>   # 対象アカウントIDが表示されればOK
+```
+
 ### デプロイ
 
 これらのコマンドは、Node/npmとAWS CLIが入っている場所――通常は自分のWindowsマシン――から実行する。EC2インスタンス自体の上ではなく、そこからAWSへデプロイする形。PowerShellで示しており、bash相当の環境変数構文は行内に注記している。

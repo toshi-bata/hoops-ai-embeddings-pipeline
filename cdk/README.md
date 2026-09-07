@@ -69,6 +69,44 @@ project's deploy pattern.
 
 Use the result as `-c allowedSshCidr=<your-ip>/32`.
 
+### First-time setup: create an AWS profile (once per machine)
+
+The AWS CLI stores profiles in `~/.aws/` on **each machine** -- they are not
+shared across computers. If you have never configured AWS on this machine (for
+example a fresh home PC), you must create a profile before the deploy steps
+below. The `aws sso login` used later only *refreshes* an existing profile; it
+does not create one.
+
+If your organization uses IAM Identity Center (SSO), create the profile
+interactively:
+
+```powershell
+aws configure sso
+```
+
+Answer the prompts (values come from your admin -- or copy them from
+`~/.aws/config` on a machine where it already works):
+
+| prompt | example / note |
+|---|---|
+| `SSO session name` | any label, e.g. `hai` |
+| `SSO start URL` | your org's URL, e.g. `https://xxxx.awsapps.com/start` |
+| `SSO region` | the region hosting SSO, e.g. `ap-northeast-1` |
+| `SSO registration scopes` | press Enter for the default (`sso:account:access`) |
+| (browser opens) | approve the login |
+| `CLI default client Region` | `ap-northeast-1` |
+| `CLI default output format` | `json` |
+| `CLI profile name` | the profile name you'll use below, e.g. `hai` |
+
+If you use long-lived IAM access keys instead of SSO, run `aws configure`
+(without `sso`) and paste the Access Key ID / Secret Access Key.
+
+Verify the profile resolves before continuing:
+
+```powershell
+aws sts get-caller-identity --profile <your-profile>   # should print the target account ID
+```
+
 ### Deploy
 
 These commands are run from wherever you have Node/npm and the AWS CLI --
