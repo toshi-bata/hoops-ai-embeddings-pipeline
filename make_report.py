@@ -461,14 +461,13 @@ def training_section(rows: list[dict]) -> list[str]:
 
         def cell(r: dict | None):
             if not r:
-                return ["-", "-", "-", "-", "-"]
+                return ["-", "-", "-", "-"]
             s = spe(r)
             st = r.get("sub_timings_d") or {}
             train_s = st.get("train_s")
             return [
                 f"{s:.1f}" if s else "-",
-                f"{s / 60:.2f}" if s else "-",
-                f"{train_s / 60:.1f}" if train_s else "-",
+                f"{train_s:.1f}" if train_s else "-",
                 f"{r.get('peak_rss_mb'):.0f}" if r.get("peak_rss_mb") else "-",
                 f"{r.get('peak_gpu_mb'):.0f}" if r.get("peak_gpu_mb") else "-",
             ]
@@ -478,8 +477,8 @@ def training_section(rows: list[dict]) -> list[str]:
             [L("GPU (NVIDIA L4)", "GPU (NVIDIA L4)")] + cell(gpu_full),
         ]
         out.append(html_table(
-            [L("device", "デバイス"), "s/epoch", L("min/epoch", "分/epoch"),
-             L("train wall (min)", "学習wall (分)"),
+            [L("device", "デバイス"), "s/epoch",
+             L("train wall (s)", "学習wall (s)"),
              L("peak RSS (MB)", "最大RSS (MB)"),
              L("peak GPU (MB)", "最大GPU (MB)")],
             table, highlight_first=L("GPU (NVIDIA L4)", "GPU (NVIDIA L4)")))

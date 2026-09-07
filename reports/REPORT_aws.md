@@ -83,10 +83,10 @@ Ran on **AWS g6.8xlarge** (AMD EPYC, 16 physical cores + **NVIDIA L4** GPU) agai
 **At 10,715 files - same model, same 10 epochs, same seed, only the device differs - the L4 GPU is 4.9x faster than the 16-core CPU:** CPU 497.3 vs GPU 101.1 s/epoch (8.3 vs 1.7 min/epoch). Over 10 epochs that is CPU 83 min vs GPU 17 min of training wall time.
 
 <table>
-<thead><tr><th>device</th><th>s/epoch</th><th>min/epoch</th><th>train wall (min)</th><th>peak RSS (MB)</th><th>peak GPU (MB)</th></tr></thead>
+<thead><tr><th>device</th><th>s/epoch</th><th>train wall (s)</th><th>peak RSS (MB)</th><th>peak GPU (MB)</th></tr></thead>
 <tbody>
-<tr><td>CPU (EPYC 16-core)</td><td>497.3</td><td>8.29</td><td>82.9</td><td>7299</td><td>-</td></tr>
-<tr class='peak'><td>GPU (NVIDIA L4)</td><td>101.1</td><td>1.68</td><td>16.8</td><td>2553</td><td>6180</td></tr>
+<tr><td>CPU (EPYC 16-core)</td><td>497.3</td><td>4972.8</td><td>7299</td><td>-</td></tr>
+<tr class='peak'><td>GPU (NVIDIA L4)</td><td>101.1</td><td>1010.8</td><td>2553</td><td>6180</td></tr>
 </tbody></table>
 
 _Speedup = CPU s/epoch / GPU s/epoch = 497.3 / 101.1 = **4.9x**. The GPU also uses far less host RAM (peak RSS) because the heavy tensor work lives on the device.
