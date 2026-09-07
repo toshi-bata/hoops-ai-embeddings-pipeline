@@ -201,6 +201,65 @@ def env_cores(env_tag: str) -> tuple[int, int] | None:
         return None
 
 
+def worker_scaling_chart(param: str, pts: list[tuple[int, float]],
+                         n_files: int, subtitle: str) -> str:
+    """Dual-axis PNG line chart (time + throughput vs worker count), embedded
+    as a base64 data URI so the report stays a single self-contained file."""
+    import io
+    import base64
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.font_manager as fm
+
+    if LANG == "ja":
+        available = {f.name for f in fm.fontManager.ttflist}
+        for cand in ("Yu Gothic", "Meiryo", "MS Gothic", "Noto Sans CJK JP",
+                     "Noto Sans JP", "IPAexGothic", "TakaoGothic"):
+            if cand in available:
+                plt.rcParams["font.family"] = cand
+                break
+    plt.rcParams["axes.unicode_minus"] = False
+
+    xs = [n for n, _ in pts]
+    times = [t for _, t in pts]
+    fps = [(n_files or 0) / t if t else 0 for _, t in pts]
+
+    t_lbl = L("time (s)", "時間 (s)")
+    f_lbl = L("files/s", "ファイル/s")
+    c_time, c_fps = "#1f77b4", "#d62728"
+
+    fig, ax1 = plt.subplots(figsize=(7.2, 4.0))
+    ln1 = ax1.plot(xs, times, "o-", color=c_time, label=t_lbl)
+    ax1.set_xlabel(param)
+    ax1.set_ylabel(t_lbl, color=c_time)
+    ax1.tick_params(axis="y", labelcolor=c_time)
+    ax1.set_xticks(xs)
+    ax1.grid(True, alpha=0.3)
+
+    ax2 = ax1.twinx()
+    ln2 = ax2.plot(xs, fps, "s--", color=c_fps, label=f_lbl)
+    ax2.set_ylabel(f_lbl, color=c_fps)
+    ax2.tick_params(axis="y", labelcolor=c_fps)
+
+    # Mark the fastest (shortest-time) worker count.
+    bn, bt = min(pts, key=lambda p: p[1])
+    ax1.axvline(bn, color="#888", linestyle=":", linewidth=1)
+
+    ax1.set_title(subtitle, fontsize=10)
+    lns = ln1 + ln2
+    ax1.legend(lns, [ln.get_label() for ln in lns], loc="upper center", fontsize=9)
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=110)
+    plt.close(fig)
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    alt = f"{param} vs {t_lbl} / {f_lbl}"
+    return (f'\n<img alt="{alt}" src="data:image/png;base64,{b64}" '
+            f'style="max-width:100%;height:auto">\n')
+
+
 def worker_scaling_section(rows: list[dict], step: str, param: str,
                            title: str, scope: str = "") -> list[str]:
     # generate_images=True is a different workload; it must not sit in the
@@ -256,6 +315,11 @@ def worker_scaling_section(rows: list[dict], step: str, param: str,
              L("parallel eff.", "並列効率"),
              L("peak RSS (MB)", "最大RSS (MB)"),
              L("failed", "失敗")], table, highlight_first=peak_n))
+        if pts:
+            chart_title = (f"{disp_tag(env_tag)} - {title} "
+                           f"(n={n_files:,})")
+            out.append(worker_scaling_chart(param, pts, n_files or 0,
+                                            chart_title))
         # Step 3 embeds per *shape*, and a heavy CAD file can hold many shapes
         # (assemblies), so n_ok (shapes embedded) can far exceed n_files (input
         # CAD files). Surface that so files/s here isn't misread as shapes/s.

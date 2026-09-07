@@ -4,3 +4,6 @@
 #     (pip install torch --index-url https://download.pytorch.org/whl/cpu | cuXXX)
 #   - hoops_ai is distributed with the licensed HOOPS AI SDK, not on PyPI
 psutil>=5.9
+# make_report.py renders the Step 1 / Step 3 worker-scaling charts embedded in
+# the HTML/Markdown reports.
+matplotlib>=3.5
