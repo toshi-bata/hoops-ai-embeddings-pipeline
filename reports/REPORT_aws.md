@@ -142,7 +142,7 @@ Amdahl fit over num_workers=4..36: serial fraction f = **52.6%**, so the asympto
 
 ### CPU vs GPU
 
-**Step 3 indexing is CPU-bound - the GPU gives no benefit.** At each platform's peak, CPU 3377.6 s (num_workers=12) vs GPU 3282.1 s (num_workers=12): the GPU install is **1.03x** the CPU throughput (i.e. faster). Peak GPU memory was 0 MB in every indexing run - `embed_shape_batch` runs the B-rep encoding on CPU workers, so a GPU adds nothing here.
+**Step 3 indexing is CPU-bound - the GPU gives no benefit.** At each platform's peak, CPU 3377.6 s (num_workers=12) vs GPU 3282.1 s (num_workers=12): the GPU install is **1.03x** the CPU throughput (i.e. faster). Peak GPU memory was 0 MB in every indexing run because this HOOPS AI build hardcodes Step 3 embedding to the CPU. The engineering team confirmed this and has since changed it to use the install's device, but does not expect a strong speedup: Step 3 is bound by reading the CAD file, encoding it, and then inference, and the GPU can only accelerate the inference sub-step - whether a real end-to-end speedup materializes is unverified and needs a re-test on the updated build.
 
 Matched num_workers, CPU vs GPU:
 
