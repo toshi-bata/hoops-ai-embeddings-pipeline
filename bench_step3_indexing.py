@@ -61,6 +61,15 @@ def main() -> None:
                     help="per-file embed time limit (seconds). Sets the "
                          "embed_shape_batch time_limit_* specs; the heavy "
                          "assembly needs this raised well above the default.")
+    ap.add_argument("--intraop-threads", type=int, default=None,
+                    help="cap the per-worker CPU compute (intra-op) thread pool "
+                         "to N by setting OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS "
+                         "before torch is imported. Each embed worker is its own "
+                         "process that otherwise spins up ~one BLAS/OpenMP thread "
+                         "per core; past a few workers that oversubscribes the "
+                         "cores. Use this to test whether that oversubscription "
+                         "is what flattens/reverses the num_workers scaling. Also "
+                         "readable from the BENCH_INTRAOP_THREADS env var.")
     ap.add_argument("--phase", default="4")
     ap.add_argument("--csv", default=None)
     ap.add_argument("--note", default="")
@@ -136,6 +145,22 @@ def main() -> None:
             os.environ["CUDA_VISIBLE_DEVICES"] = ""
             cuda_masked = True
 
+    # Cap the per-worker intra-op (CPU compute) thread pool. Each embed worker
+    # is a separate process that otherwise spins up ~one BLAS/OpenMP thread per
+    # core; past a few workers that oversubscribes the machine's cores. Setting
+    # this lets us test whether that oversubscription is what flattens/reverses
+    # the num_workers scaling. It must be set before torch/hoops_ai (and thus
+    # OpenMP/MKL) are imported, and it is inherited by the spawned workers.
+    intraop_threads = args.intraop_threads
+    if intraop_threads is None and os.environ.get("BENCH_INTRAOP_THREADS"):
+        intraop_threads = int(os.environ["BENCH_INTRAOP_THREADS"])
+    if intraop_threads:
+        for _var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+                     "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+            os.environ[_var] = str(intraop_threads)
+        print(f"[step3] intra-op threads per worker capped at {intraop_threads} "
+              f"(OMP/MKL/OPENBLAS/NUMEXPR/VECLIB)", flush=True)
+
     # Only now activate the license: apply_license imports hoops_ai, which pulls
     # in torch, and CUDA_VISIBLE_DEVICES has to be set before that happens.
     apply_license()
@@ -143,6 +168,10 @@ def main() -> None:
     import torch
     from hoops_ai.ml import CADSearch
     from hoops_ai.ml.embeddings import HOOPSEmbeddings
+
+    # Belt-and-suspenders for the parent process (fork inherits this state).
+    if intraop_threads:
+        torch.set_num_threads(int(intraop_threads))
 
     out_dir = BENCH_ROOT / "out" / args.env_tag / "indexing"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -182,6 +211,7 @@ def main() -> None:
         "extra": {
             "gen_images": args.gen_images,
             "save_index": args.save_index,
+            "intraop_threads": intraop_threads,
             "filelist": filelist.name,
             "torch": torch.__version__,
             "cuda_available": bool(torch.cuda.is_available()),
