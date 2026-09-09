@@ -9,7 +9,7 @@ See also the companion report for the other machine (`REPORT_local.*` / `REPORT_
 
 Conclusions first; the supporting numbers and per-setting sweeps follow in each step's section.
 
-- **Step 1 (encoding) and Step 3 (embedding + indexing) are CPU-bound** - the GPU sits idle, so the GPU install buys nothing. Step 1 throughput scales with worker count up to roughly the machine's physical core count, then flattens; Step 3 peaks at a lower worker count and then *declines* as more workers are added, because each worker process spawns its own pool of CPU compute (intra-op) threads: past a low worker count the total thread count far exceeds the machine's cores, and that CPU-thread oversubscription - not RAM or file-descriptor pressure - is what slows every worker down.
+- **Step 1 (encoding) and Step 3 (embedding + indexing) are CPU-bound** - the GPU sits idle, so the GPU install buys nothing. Step 1 throughput scales with worker count up to roughly the machine's physical core count, then flattens; Step 3 peaks at a lower worker count and then *declines* as more workers are added, because each worker process spawns its own pool of CPU compute (intra-op) threads: past a low worker count the total thread count far exceeds the machine's cores, and that CPU-thread oversubscription - not RAM or file-descriptor pressure - is what slows every worker down. A controlled re-test (clean 500-file subset, sweeping intra-op threads per worker) confirmed this: capping each worker to 1-2 intra-op threads removes the decline and lifts peak throughput ~30% (fastest at num_workers ~ physical cores), while peak RSS is unchanged across settings - ruling out RAM.
 - **Step 2 (training) is the only GPU-bound stage** and the only place a GPU pays off. Because the model is trained with contrastive learning, batch_size changes the trained model, so the fair speed comparison fixes batch_size: at the tutorial default batch_size=64 (same model, same 10 epochs), on a **10,715-file heavy dataset** (AWS g6.8xlarge, NVIDIA L4) the GPU is about **4.9x faster** than the 16-core CPU (497 vs 101 s/epoch). Compare on `s/epoch`, not total wall (which includes a fixed start-up cost).
 - _How the tables read:_ within each sweep, speedup is quoted against the smallest setting measured in that group (lowest worker count, or smallest batch size for step 2); parallel efficiency is speedup divided by the ideal linear speedup.
 
@@ -152,6 +152,27 @@ Matched num_workers, CPU vs GPU:
 <tr><td>12</td><td class='peak'>3377.6</td><td class='peak'>3282.1</td><td>1.03x</td></tr>
 </tbody></table>
 _Highlighted: each platform's peak (CPU num_workers=12, GPU num_workers=12). GPU speedup = CPU time / GPU time; below 1.00x means the GPU install is slower._
+
+### Worker-vs-thread re-test - CPU-thread oversubscription confirmed
+
+The num_workers decline above was traced to intra-op (BLAS/OpenMP) thread oversubscription in a controlled re-test on the same g6.8xlarge (16 physical / 32 logical cores, 121 GB), using a clean 500-file `mechcad` subset (balanced 50/category, restricted to files that had already encoded cleanly in a prior full-corpus run, so every run has 0 failures - the curves are pure worker scaling). Each embed worker is a separate process that, by default, spawns ~one BLAS/OpenMP thread per core, so past a few workers the total thread count (workers x cores) far exceeds the machine and every worker slows down. Capping the per-worker pool (`OMP/MKL/OPENBLAS/NUMEXPR/VECLIB_NUM_THREADS`, set before torch import and inherited by the spawned workers) removes the decline:
+
+<table>
+<thead><tr><th>num_workers</th><th>default (files/s)</th><th>1 thread/worker</th><th>2 threads/worker</th><th>peak RSS (GB, default)</th></tr></thead>
+<tbody>
+<tr><td>8</td><td>9.31</td><td>9.39</td><td>9.45</td><td>17</td></tr>
+<tr class='peak'><td>16</td><td>8.71</td><td>13.98</td><td>13.88</td><td>33</td></tr>
+<tr><td>24</td><td>6.25</td><td>13.75</td><td>13.68</td><td>48</td></tr>
+<tr><td>32</td><td>5.91</td><td>13.00</td><td>12.85</td><td>67</td></tr>
+<tr><td>40</td><td>5.58</td><td>12.14</td><td>11.80</td><td>80</td></tr>
+</tbody></table>
+_default = no cap (~1 thread/core per worker). Rows 12 omitted for brevity (default 10.75 / 12.18 / 12.35). RSS is per-worker-count and near-identical across thread settings._
+
+- **Default collapses** from a 10.75 files/s peak (num_workers=12) to 5.58 at num_workers=40 (-48%); **capping to 1-2 threads/worker removes the collapse** and raises the peak ~30% to ~14 files/s at num_workers=16.
+- **RAM is not the cause**: peak RSS is essentially identical across thread settings at the same worker count (num_workers=40: 80 / 79 / 81 GB) and never exceeds ~80 GB of the 121 GB.
+- **Fastest = many workers x few threads**: at equal total threads, 16 workers x 1 thread (14.0 files/s) beats 8 workers x 2 threads (9.5) by +48%. The embedding workload parallelizes across files (workers), not across BLAS threads within one small part. Sweet spot: num_workers ~ physical core count (16), intra-op threads = 1. If `embed_shape_batch` pinned `OMP_NUM_THREADS=1` (or exposed a `threads_per_worker`) in its worker pool, default full-corpus throughput would improve markedly and stop degrading as workers scale.
+
+
 
 ## Caveats
 
