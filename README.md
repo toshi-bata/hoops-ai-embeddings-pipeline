@@ -206,6 +206,41 @@ block, and the original point of the flag was to isolate rendering's
 (large, constant) cost from the `num_workers` signal -- see "Fair-comparison
 design decisions" below.
 
+## Intra-op thread cap (1 thread per worker, steps 1 and 3)
+
+Step 1 (encoding) and step 3 (embedding + indexing) run many **worker
+processes**. Left alone, each worker starts roughly one BLAS/OpenMP
+(intra-op) thread per core, so with `W` workers the machine is asked to run
+`W x cores` compute threads at once. Past a handful of workers that
+oversubscribes the cores, and throughput stops rising with `num_workers` and
+then *falls*. A controlled re-test on the g6.8xlarge (16 physical / 32
+logical cores) confirmed this: capping each worker to a single intra-op
+thread removed the decline and raised peak throughput by ~30% -- see the
+["Worker-vs-thread re-test" in `reports/REPORT_aws.md`](reports/REPORT_aws.md).
+
+Because of that, steps 1 and 3 **cap intra-op threads at 1 per worker by
+default**. Control it with `--intraop-threads N` (or the
+`HOOPS_AI_INTRAOP_THREADS` environment variable, same name/meaning as the
+`hoops_ai_similarity_search_server` / `hoops_ai_native_bridge` setting):
+
+- `--intraop-threads 1` (default): one intra-op thread per worker.
+- `--intraop-threads 0`: no cap (the old behaviour; parallelism is left to
+  each library's auto-detection).
+- The cap is applied by exporting `OMP/MKL/OPENBLAS/NUMEXPR/VECLIB` thread
+  vars **before** `torch`/`hoops_ai` are imported, so the spawned workers
+  inherit it.
+
+**Step 2 (training) is deliberately left uncapped.** CPU training is a single
+process that should legitimately use every core's intra-op threads; capping it
+would slow only the CPU side and break the CPU-vs-GPU comparison. Step 2 warns
+if it sees one of those thread vars already set in the environment.
+
+If you embed this idea in your own app, don't set the thread vars for the
+whole process -- that would also pin your host's own numpy/FAISS to one
+thread. Set them only around the call that spawns the embedding workers and
+restore them afterwards; see a reference implementation in
+[`hoops_ai_similarity_search_server`](https://github.com/toshi-bata/hoops_ai_similarity_search_server/blob/f7211a4/embeddings.py#L94-L148).
+
 ## Benchmarking: CPU vs GPU across the pipeline
 
 The scripts above are also what the sweep harnesses call, one process per
@@ -222,7 +257,11 @@ runs. Two entry points:
   corpus) -- the same idea at 10,000+ file scale: `run_heavy_batch.sh` runs
   step 1 once (CPU, keeping the dataset) then step 2 CPU vs GPU on that one
   dataset so both sides train the *same* model; `run_heavy_scaling.sh` sweeps
-  step 1/3 worker counts on a representative subset.
+  step 1/3 worker counts on a representative subset. The scaling script caps
+  intra-op threads per worker by default (`INTRAOP`, 0 = uncapped control),
+  can run either side (`SIDE=cpu|gpu`, GPU needs `GPU_PY`), and does one
+  discarded warm-up (`WARMUP`). It writes capped runs to phases `HC1`/`HC3`
+  (uncapped stays on the original `HB1`/`HB3`) so the two never mix.
 
 Results all land in `results/results.csv` (gitignored -- can contain your CAD
 file paths); `make_report.py --lang en --scope {local,aws,both}` turns it

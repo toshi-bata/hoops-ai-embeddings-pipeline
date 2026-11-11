@@ -98,6 +98,78 @@ def freeze_filelist(files: list[str], out_path: Path) -> Path:
     out_path.write_text("\n".join(files) + "\n", encoding="utf-8", newline="\n")
     return out_path
 
+
+# --------------------------------------------------------------------------
+# intra-op (BLAS / OpenMP) thread cap
+# --------------------------------------------------------------------------
+# The environment variables that cap the per-process intra-op (CPU compute)
+# thread pools of the math libraries hoops_ai / torch / numpy pull in. Setting
+# all of them covers whichever backend a given build actually links against.
+INTRAOP_ENV_VARS = (
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+)
+
+
+def resolve_intraop_threads(cli_value: int | None) -> int:
+    """Resolve the per-worker intra-op thread cap, highest priority first.
+
+    Why this exists: each embed/encode worker is a separate process that, left
+    alone, starts ~one BLAS/OpenMP thread per core. With W workers that is
+    W x cores threads all fighting over the machine's cores, which is what
+    flattens and then reverses the num_workers scaling past a handful of workers
+    (see the "Worker-vs-thread re-test" in reports/REPORT_aws.*). Capping each
+    worker to a single intra-op thread removes the oversubscription.
+
+    Priority: CLI argument > HOOPS_AI_INTRAOP_THREADS env var >
+    BENCH_INTRAOP_THREADS env var (the old name, kept for compatibility) >
+    default 1. A value of 0 means "do not cap" (the historical behaviour).
+    HOOPS_AI_INTRAOP_THREADS deliberately matches the name and meaning used by
+    hoops_ai_similarity_search_server and hoops_ai_native_bridge (default 1,
+    0 disables).
+
+    A negative or non-integer value is a hard error -- it is NOT silently reset
+    to the default, so a typo in a sweep script fails loudly instead of quietly
+    changing what was measured.
+    """
+    if cli_value is not None:
+        raw, source = cli_value, "--intraop-threads"
+    elif os.environ.get("HOOPS_AI_INTRAOP_THREADS"):
+        raw, source = os.environ["HOOPS_AI_INTRAOP_THREADS"], "HOOPS_AI_INTRAOP_THREADS"
+    elif os.environ.get("BENCH_INTRAOP_THREADS"):
+        raw, source = os.environ["BENCH_INTRAOP_THREADS"], "BENCH_INTRAOP_THREADS"
+    else:
+        return 1
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        sys.exit(f"invalid intra-op thread count from {source}: {raw!r} "
+                 "(must be an integer >= 0; 0 disables the cap)")
+    if value < 0:
+        sys.exit(f"invalid intra-op thread count from {source}: {value} "
+                 "(must be an integer >= 0; 0 disables the cap)")
+    return value
+
+
+def apply_intraop_cap(n: int) -> None:
+    """Export the intra-op thread cap so spawned/forked workers inherit it.
+
+    Sets every INTRAOP_ENV_VARS variable to str(n) when n > 0; does nothing when
+    n == 0 (the "uncapped" case). MUST be called BEFORE this process imports
+    hoops_ai / torch / numpy: on Linux a worker may be created with fork, and a
+    forked child keeps whatever BLAS thread-pool settings its parent already read
+    at import time, so changing these env vars after those libraries are imported
+    has no effect on the workers.
+    """
+    if n <= 0:
+        return
+    for var in INTRAOP_ENV_VARS:
+        os.environ[var] = str(n)
+
+
 CSV_FIELDS = [
     "run_id",          # unique per measurement
     "timestamp",

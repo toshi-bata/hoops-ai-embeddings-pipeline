@@ -22,10 +22,11 @@ import sys
 import traceback
 from pathlib import Path
 
-from bench_common import (BENCH_ROOT, CAD_EXTENSIONS, PeakSampler, Timer, apply_license,
-                          check_hoops_ai_importable, discover_cad_files, freeze_filelist,
-                          make_run_id, parse_extensions, peak_gpu_mb, require_license,
-                          resolve_checkpoint, write_row)
+from bench_common import (BENCH_ROOT, CAD_EXTENSIONS, PeakSampler, Timer, apply_intraop_cap,
+                          apply_license, check_hoops_ai_importable, discover_cad_files,
+                          freeze_filelist, make_run_id, parse_extensions, peak_gpu_mb,
+                          require_license, resolve_checkpoint, resolve_intraop_threads,
+                          write_row)
 
 
 def main() -> None:
@@ -63,13 +64,15 @@ def main() -> None:
                          "assembly needs this raised well above the default.")
     ap.add_argument("--intraop-threads", type=int, default=None,
                     help="cap the per-worker CPU compute (intra-op) thread pool "
-                         "to N by setting OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS "
-                         "before torch is imported. Each embed worker is its own "
-                         "process that otherwise spins up ~one BLAS/OpenMP thread "
-                         "per core; past a few workers that oversubscribes the "
-                         "cores. Use this to test whether that oversubscription "
-                         "is what flattens/reverses the num_workers scaling. Also "
-                         "readable from the BENCH_INTRAOP_THREADS env var.")
+                         "to N by setting OMP/MKL/OPENBLAS/NUMEXPR/VECLIB thread "
+                         "vars before torch is imported (inherited by the spawned "
+                         "embed workers). Each embed worker is its own process "
+                         "that otherwise spins up ~one BLAS/OpenMP thread per "
+                         "core; past a few workers that oversubscribes the cores "
+                         "and flattens/reverses the num_workers scaling. Default "
+                         "1 (one thread per worker); 0 disables the cap. Also "
+                         "readable from HOOPS_AI_INTRAOP_THREADS (or the old "
+                         "BENCH_INTRAOP_THREADS).")
     ap.add_argument("--phase", default="4")
     ap.add_argument("--csv", default=None)
     ap.add_argument("--note", default="")
@@ -147,19 +150,18 @@ def main() -> None:
 
     # Cap the per-worker intra-op (CPU compute) thread pool. Each embed worker
     # is a separate process that otherwise spins up ~one BLAS/OpenMP thread per
-    # core; past a few workers that oversubscribes the machine's cores. Setting
-    # this lets us test whether that oversubscription is what flattens/reverses
-    # the num_workers scaling. It must be set before torch/hoops_ai (and thus
-    # OpenMP/MKL) are imported, and it is inherited by the spawned workers.
-    intraop_threads = args.intraop_threads
-    if intraop_threads is None and os.environ.get("BENCH_INTRAOP_THREADS"):
-        intraop_threads = int(os.environ["BENCH_INTRAOP_THREADS"])
+    # core; past a few workers that oversubscribes the machine's cores and
+    # flattens/reverses the num_workers scaling (see reports/REPORT_aws.*
+    # "Worker-vs-thread re-test"). Default is 1 thread per worker; 0 disables.
+    # It must be set before torch/hoops_ai (and thus OpenMP/MKL) are imported,
+    # and it is inherited by the spawned workers.
+    intraop_threads = resolve_intraop_threads(args.intraop_threads)
+    apply_intraop_cap(intraop_threads)
     if intraop_threads:
-        for _var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
-                     "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
-            os.environ[_var] = str(intraop_threads)
         print(f"[step3] intra-op threads per worker capped at {intraop_threads} "
               f"(OMP/MKL/OPENBLAS/NUMEXPR/VECLIB)", flush=True)
+    else:
+        print("[step3] intra-op threads per worker: uncapped", flush=True)
 
     # Only now activate the license: apply_license imports hoops_ai, which pulls
     # in torch, and CUDA_VISIBLE_DEVICES has to be set before that happens.

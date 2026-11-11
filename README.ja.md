@@ -95,12 +95,26 @@ python bench_step3_indexing.py --env-tag gpu --num-workers 16 \
 
 `run_pipeline.py`は、まさにこの3つの呼び出しを(データセットのポインタ、続いてチェックポイントのポインタで)つなぎ合わせた薄いラッパーであり、中間のJSONファイルを自分で追いかける必要がない。なお`bench_step2_training.py`は、単体で呼んでも`run_pipeline.py`経由で呼んでも、学習済みチェックポイントを(Lightning自身の深いパスに加えて)常に`out/<env-tag>/<env-tag>.ckpt`にもコピーし、`results/checkpoint_<env-tag>.json`に両方のパスを記録する――分かりやすい場所に置かれたパスは常に存在する。`bench_step3_indexing.py`の`--index-name`を使えば、デフォルトの`<env-tag>_n<n_files>`ではなく同じ命名でインデックスを保存できる――`--gen-images`と組み合わせると、パーツごとの`.png`/`.scs`アセットの置き場所(`<index-name>/`、`<index-name>.faiss`の直下の隣)も制御し、qt_sandbox自身のレイアウトに一致させる。`run_pipeline.py`と異なり、こちら(`bench_step3_indexing.py`単体)では`--gen-images`は**デフォルトOFF**のまま:このスクリプトはベンチマークハーネスの部品も兼ねており、このフラグはもともとレンダリング(大きく一定のコスト)を`num_workers`の傾向から切り離して測るためのものだった――詳細は下記「公平な比較のための設計判断」参照。
 
+## intra-opスレッド上限(ワーカーあたり1スレッド、step 1 と step 3)
+
+Step 1(エンコード)と step 3(埋め込み+索引化)は多数の**ワーカープロセス**を起動する。何もしないと各ワーカーがコアあたり約1本のBLAS/OpenMP(intra-op)スレッドを立ち上げるため、`W`ワーカーでは`W x コア数`の計算スレッドが同時にコアを奪い合う。数ワーカーを超えるとこれがコアの過剰割り当てとなり、スループットは`num_workers`に対して頭打ちになり、やがて*低下*する。g6.8xlarge(物理16/論理32コア)での対照実験でこれを確認済み:各ワーカーをintra-op 1スレッドに抑えると低下が消え、ピークスループットが約30%向上した――[`reports/REPORT_aws.md`の「Worker-vs-thread re-test」](reports/REPORT_aws.md)参照。
+
+このため、step 1 と step 3 は**既定でintra-opスレッドをワーカーあたり1に制限**する。`--intraop-threads N`(または環境変数`HOOPS_AI_INTRAOP_THREADS`。`hoops_ai_similarity_search_server` / `hoops_ai_native_bridge`の設定と同じ名前・同じ意味)で制御する:
+
+- `--intraop-threads 1`(既定):ワーカーあたりintra-op 1スレッド。
+- `--intraop-threads 0`:上限なし(従来の挙動。並列度は各ライブラリの自動判定に任せる)。
+- 上限は`torch`/`hoops_ai`のimportより**前**に`OMP/MKL/OPENBLAS/NUMEXPR/VECLIB`のスレッド変数をexportすることで適用し、spawnされたワーカーに継承させる。
+
+**Step 2(学習)は意図的に制限しない。** CPU学習は1プロセスで全コアのintra-opスレッドを正当に使うべきで、制限するとCPU側だけが遅くなりCPU vs GPUの比較が成り立たなくなる。これらのスレッド変数が環境に既に設定されている場合、step 2は警告を出す。
+
+この考え方を自分のアプリに組み込む場合は、プロセス全体ではスレッド変数を設定しないこと――ホスト自身のnumpy/FAISSまで1スレッドに固定されてしまう。埋め込みワーカーを生成する呼び出しの前後だけ設定して戻すのがよい。実装例は[`hoops_ai_similarity_search_server`](https://github.com/toshi-bata/hoops_ai_similarity_search_server/blob/f7211a4/embeddings.py#L94-L148)を参照。
+
 ## ベンチマーク:パイプライン全体でのCPU vs GPU
 
 上記のスクリプトは、スイープハーネスが呼び出しているものでもある。1計測につき1プロセスを起動するので、CUDAコンテキスト/ワーカープール/アロケータの状態が実行間で漏れることはない。エントリポイントは2つ:
 
 - **`run_benchmark.ps1`**(Windows、ローカルマシン)-- フェーズ分割された時間予算付きスイープ:プローブ -> step 1の`max_workers`スイープ -> フルエンコード(両環境) -> step 2の`accelerator x batch_size x num_workers`マトリクス -> step 3の`num_workers`スイープ+フルインデックス構築 -> レポート。`-DryRun`、`-Unattended`(夜間実行:確認プロンプト無し、スリープ抑止、1計測がハングしても全体の予算を食い尽くさないためのハードなper-runタイムアウト)、`-Phases`に対応。
-- **`run_heavy_batch.sh`** / **`run_heavy_scaling.sh`**(AWS/Ubuntu、大規模コーパス)-- 同じ考え方を1万ファイル超の規模で:`run_heavy_batch.sh`はstep 1を1回(CPU、データセットを保持)実行してからstep 2をCPU vs GPUで実行し、両側が*同じ*モデルを学習するようにする。`run_heavy_scaling.sh`は代表的なサブセットに対してstep 1/3のワーカー数をスイープする。
+- **`run_heavy_batch.sh`** / **`run_heavy_scaling.sh`**(AWS/Ubuntu、大規模コーパス)-- 同じ考え方を1万ファイル超の規模で:`run_heavy_batch.sh`はstep 1を1回(CPU、データセットを保持)実行してからstep 2をCPU vs GPUで実行し、両側が*同じ*モデルを学習するようにする。`run_heavy_scaling.sh`は代表的なサブセットに対してstep 1/3のワーカー数をスイープする。スケーリング用スクリプトは既定でワーカーあたりのintra-opスレッドを制限し(`INTRAOP`、0で上限なしの対照)、どちらの側でも実行でき(`SIDE=cpu|gpu`、GPUは`GPU_PY`が必要)、捨てるウォームアップを1本行う(`WARMUP`)。制限ありの実行はフェーズ`HC1`/`HC3`に(上限なしは従来どおり`HB1`/`HB3`)記録し、両者が混ざらないようにする。
 
 結果はすべて`results/results.csv`(gitignore対象――CADファイルのパスを含みうるため)に書き込まれ、`make_report.py --lang en --scope {local,aws,both}`でそれを`results/REPORT_*.md/.html`に変換する。[`reports/`](reports/)配下に既にコミットされている2つのレポートは、このリポジトリの元になったCPU1.1/GPU1.1のノートPCおよびg6.8xlarge/L4での実行結果である――自分の`results.csv`ができたら、同じツールで自分のレポートを再生成すること。
 

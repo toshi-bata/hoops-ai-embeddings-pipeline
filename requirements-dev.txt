@@ -1,0 +1,7 @@
+# Development-only dependencies (tests). Install with:
+#   pip install -r requirements-dev.txt
+# Runtime deps live in requirements.txt; torch / hoops_ai are provided by the
+# licensed SDK venv (see README "Prerequisites") and are NOT needed to run the
+# tests here -- the tests cover only the SDK-free harness helpers.
+-r requirements.txt
+pytest>=7.0

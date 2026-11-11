@@ -22,9 +22,9 @@ import traceback
 from pathlib import Path
 
 from bench_common import (BENCH_ROOT, REPO_ROOT, CAD_EXTENSIONS, PeakSampler, Timer,
-                          check_hoops_ai_importable, discover_cad_files, freeze_filelist,
-                          make_run_id, parse_extensions, peak_gpu_mb, probe_hardware,
-                          require_license, write_row)
+                          apply_intraop_cap, check_hoops_ai_importable, discover_cad_files,
+                          freeze_filelist, make_run_id, parse_extensions, peak_gpu_mb,
+                          probe_hardware, require_license, resolve_intraop_threads, write_row)
 
 
 def main() -> None:
@@ -59,6 +59,14 @@ def main() -> None:
                     help="per-file encode time limit (create_flow "
                          "parallel_task_kwargs). Default flow limit is 120s, "
                          "which the heavy assembly needs raised.")
+    ap.add_argument("--intraop-threads", type=int, default=None,
+                    help="cap the per-worker CPU compute (intra-op) thread pool "
+                         "to N by exporting OMP/MKL/OPENBLAS/NUMEXPR/VECLIB "
+                         "thread vars before hoops_ai is imported (inherited by "
+                         "the spawned encode workers). Default 1 (one thread per "
+                         "worker avoids the workers x cores oversubscription that "
+                         "flattens the max_workers scaling); 0 disables the cap. "
+                         "Also readable from HOOPS_AI_INTRAOP_THREADS.")
     ap.add_argument("--pointer-tag", default=None,
                     help="suffix for the dataset pointer file "
                          "(results/dataset_<tag>.json). Defaults to env-tag; "
@@ -69,6 +77,17 @@ def main() -> None:
 
     check_hoops_ai_importable()
     require_license()
+
+    # Cap the per-worker intra-op (CPU compute) thread pool. Each encode worker
+    # is a separate process that otherwise spins up ~one BLAS/OpenMP thread per
+    # core; past a few workers that oversubscribes the cores and flattens the
+    # max_workers scaling (see reports/REPORT_aws.* "Worker-vs-thread re-test").
+    # Must run before hoops_ai (and thus OpenMP/MKL) is imported so the spawned
+    # workers inherit it.
+    intraop_threads = resolve_intraop_threads(args.intraop_threads)
+    apply_intraop_cap(intraop_threads)
+    print(f"[step1] intra-op threads per worker: "
+          f"{intraop_threads if intraop_threads else 'uncapped'}", flush=True)
 
     if args.filelist:
         filelist = Path(args.filelist)
@@ -122,7 +141,8 @@ def main() -> None:
         "param_name": "max_workers",
         "param_value": args.max_workers,
         "extra": {"flow_name": flow_name, "filelist": filelist.name,
-                  "keep_output": args.keep_output},
+                  "keep_output": args.keep_output,
+                  "intraop_threads": intraop_threads},
         "note": args.note,
     }
 

@@ -76,6 +76,13 @@ def main() -> None:
                      help="worker count for step 1 (max_workers) and step 3 (num_workers)")
     ap.add_argument("--time-limit", type=float, default=None,
                      help="per-file time limit in seconds, applied to step 1 and step 3")
+    ap.add_argument("--intraop-threads", type=int, default=1,
+                     help="cap the per-worker CPU compute (intra-op) thread pool "
+                          "for step 1 and step 3 (one BLAS/OpenMP thread per "
+                          "worker avoids the workers x cores oversubscription "
+                          "that flattens worker scaling). Default 1; 0 disables "
+                          "the cap. Not applied to step 2 training, which is a "
+                          "single process that should use all cores.")
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--train-num-workers", type=int, default=0,
                      help="DataLoader worker count for step 2 (default 0)")
@@ -113,6 +120,7 @@ def main() -> None:
              "--env-tag", args.run_name, "--max-workers", str(args.workers),
              "--filelist", str(filelist), "--source-dir", str(args.source_dir),
              "--pointer-tag", args.run_name, "--keep-output",
+             "--intraop-threads", str(args.intraop_threads),
              "--phase", "prod", "--note", "run_pipeline"]
     if args.time_limit is not None:
         step1 += ["--time-limit-s", str(args.time_limit)]
@@ -146,6 +154,7 @@ def main() -> None:
              "--env-tag", args.run_name, "--num-workers", str(args.workers),
              "--filelist", str(filelist), "--ckpt", str(trained_ckpt),
              "--index-name", args.run_name, "--save-index",
+             "--intraop-threads", str(args.intraop_threads),
              "--phase", "prod", "--note", "run_pipeline"]
     if args.time_limit is not None:
         step3 += ["--time-limit", str(args.time_limit)]

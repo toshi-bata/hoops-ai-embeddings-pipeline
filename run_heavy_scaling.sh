@@ -14,10 +14,14 @@
 #   16-core mark without wasting hours on near-identical points.
 #
 # What it runs (per worker count W in WORKERS)
-#   Step 1: bench_step1_dataprep.py  --max-workers W   (phase HB1, re-encodes all)
-#   Step 3: bench_step3_indexing.py  --num-workers W   (phase HB3, re-embeds all)
+#   Step 1: bench_step1_dataprep.py  --max-workers W   (phase HB1/HC1, re-encodes all)
+#   Step 3: bench_step3_indexing.py  --num-workers W   (phase HB3/HC3, re-embeds all)
 #
 #   Each point re-processes the whole corpus, so this is a multi-hour run.
+#
+#   Phase names depend on the intra-op cap: INTRAOP=0 (uncapped) keeps the
+#   original HB1/HB3; any cap (the default INTRAOP=1) uses HC1/HC3 (C = capped)
+#   so the capped curves never mix with the earlier uncapped HB1/HB3 rows.
 #
 # Portability
 #   The file list stores paths RELATIVE to the corpus root. Set FILE_ROOT to the
@@ -35,25 +39,63 @@
 #   FILELIST=filelists/mech_heavy_aws.txt \
 #   ./run_heavy_scaling.sh
 #
+#   Re-measurement calls (default INTRAOP=1 -> phases HC1/HC3):
+#     Step 3 CPU sweep:  DO_STEP1=0 WORKERS="8 12 16 24 32" ./run_heavy_scaling.sh
+#     Step 1 CPU sweep:  DO_STEP3=0 WORKERS="16 24 32" ./run_heavy_scaling.sh
+#     GPU parity:        SIDE=gpu DO_STEP1=0 WORKERS="<Step 3 CPU peak>" GPU_PY=/path/gpu/python ./run_heavy_scaling.sh
+#                        SIDE=gpu DO_STEP3=0 WORKERS="<Step 1 CPU peak>" GPU_PY=/path/gpu/python ./run_heavy_scaling.sh
+#
+#   Optional overrides:
+#     INTRAOP=1            intra-op threads per worker (0 = uncapped control -> HB1/HB3)
+#     SIDE=cpu|gpu         which venv/device (gpu uses GPU_PY + gpu1.1 tag)
+#     WARMUP=1             do one discarded warm-up run first (phase WU)
+#
 set -uo pipefail
 
 # ---- config (override via environment) -----------------------------------
 BENCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CPU_PY="${CPU_PY:-python}"
+GPU_PY="${GPU_PY:-}"                   # GPU venv python; required only when SIDE=gpu
 FILE_ROOT="${FILE_ROOT:-/home/ubuntu/dataset/mechcad/mechcad}"
 FILELIST="${FILELIST:-filelists/mech_heavy.txt}"
 WORKERS="${WORKERS:-8 12 16 20 24}"   # coarse sweep around the 16-core peak
 TIME_LIMIT="${TIME_LIMIT:-1200}"      # per-file limit (s) for both stages
 CKPT="${CKPT:-}"                      # Step 3 SIGNAL checkpoint (or HOOPS_AI_CKPT)
+INTRAOP="${INTRAOP:-1}"               # intra-op threads per worker (0 = uncapped control)
+SIDE="${SIDE:-cpu}"                   # cpu | gpu  (gpu uses GPU_PY + gpu1.1 tag)
+WARMUP="${WARMUP:-1}"                 # one discarded warm-up run first (phase WU)
 DO_STEP1="${DO_STEP1:-1}"
 DO_STEP3="${DO_STEP3:-1}"
 CPU_TAG="cpu1.1"
+GPU_TAG="gpu1.1"
 STAMP="$(date +%Y%m%d_%H%M%S)"
 LOG_DIR="$BENCH_DIR/logs"
 mkdir -p "$LOG_DIR"
 
 export BENCH_FILE_ROOT="$FILE_ROOT"
 [[ -n "$CKPT" ]] && export HOOPS_AI_CKPT="$CKPT"
+
+# Pick the interpreter / env tag for the requested side. GPU_PY has no default
+# (unlike run_heavy_batch.sh, where both sides always run): a scaling sweep is
+# CPU by default, so an unset GPU venv must fail loudly rather than silently
+# fall back to `python`.
+if [[ "$SIDE" == "gpu" ]]; then
+  if [[ -z "$GPU_PY" ]]; then
+    printf 'ERROR: SIDE=gpu but GPU_PY is not set. Point it at the GPU venv python.\n' >&2
+    exit 1
+  fi
+  PY="$GPU_PY"; TAG="$GPU_TAG"
+else
+  PY="$CPU_PY"; TAG="$CPU_TAG"
+fi
+
+# Phase names: keep the original HB1/HB3 for the uncapped control so capped runs
+# (HC1/HC3) never mix with earlier HB1/HB3 rows in results.csv.
+if [[ "$INTRAOP" == "0" ]]; then
+  PH1="HB1"; PH3="HB3"
+else
+  PH1="HC1"; PH3="HC3"
+fi
 
 cd "$BENCH_DIR" || exit 1
 
@@ -95,10 +137,12 @@ rule; say "HOOPS AI 1.1 heavy worker-scaling  ($(wc -l < "$FILELIST" 2>/dev/null
 say "bench dir : $BENCH_DIR"
 say "corpus    : $FILE_ROOT   (BENCH_FILE_ROOT)"
 say "filelist  : $FILELIST"
-say "CPU py    : $CPU_PY"
+say "side      : $SIDE   (py: $PY, tag: $TAG)"
 say "workers   : $WORKERS"
-say "step1     : $([[ $DO_STEP1 == 1 ]] && echo ON || echo off)  (phase HB1, max_workers sweep)"
-say "step3     : $([[ $DO_STEP3 == 1 ]] && echo ON || echo off)  (phase HB3, num_workers sweep)"
+say "intra-op  : $([[ $INTRAOP == 0 ]] && echo 'uncapped (control)' || echo "$INTRAOP thread(s)/worker")"
+say "warmup    : $([[ $WARMUP == 1 ]] && echo 'ON (phase WU, discarded)' || echo off)"
+say "step1     : $([[ $DO_STEP1 == 1 ]] && echo ON || echo off)  (phase $PH1, max_workers sweep)"
+say "step3     : $([[ $DO_STEP3 == 1 ]] && echo ON || echo off)  (phase $PH3, num_workers sweep)"
 say "ckpt      : ${CKPT:-<from HOOPS_AI_CKPT / resolve_checkpoint>}"
 say ""
 
@@ -119,35 +163,61 @@ run() {  # label python script args...
   if [[ $code -ne 0 ]]; then say "   [warn] exit=$code (see $log)"; fi
 }
 
+# First worker count in the sweep, used for the warm-up.
+WARMUP_W="$(set -- $WORKERS; echo "${1:-8}")"
+
+# One discarded warm-up: the first real run otherwise pays venv/lib load and a
+# first filesystem scan of the corpus, penalising whichever point runs first.
+# Written to phase WU so it never mixes with the HB*/HC* measurement rows.
+if [[ "$WARMUP" == "1" ]]; then
+  rule; say "WARM-UP (discarded, phase WU)"; rule
+  if [[ "$DO_STEP3" == "1" ]]; then
+    run "warmup-s3-nw${WARMUP_W}" "$PY" bench_step3_indexing.py \
+        --env-tag "$TAG" --num-workers "$WARMUP_W" \
+        --filelist "$FILELIST" --time-limit "$TIME_LIMIT" \
+        --intraop-threads "$INTRAOP" \
+        --phase WU --note "heavy-scaling warmup discarded"
+  elif [[ "$DO_STEP1" == "1" ]]; then
+    run "warmup-s1-mw${WARMUP_W}" "$PY" bench_step1_dataprep.py \
+        --env-tag "$TAG" --max-workers "$WARMUP_W" \
+        --filelist "$FILELIST" --source-dir "$FILE_ROOT" \
+        --intraop-threads "$INTRAOP" --time-limit-s "$TIME_LIMIT" \
+        --phase WU --note "heavy-scaling warmup discarded"
+  fi
+fi
+
 # ==========================================================================
-# STEP 1 - encoding throughput vs max_workers (CPU)
+# STEP 1 - encoding throughput vs max_workers
 # ==========================================================================
 if [[ "$DO_STEP1" == "1" ]]; then
-  rule; say "STEP 1  encoding - CPU max_workers sweep: $WORKERS"; rule
+  rule; say "STEP 1  encoding - $SIDE max_workers sweep: $WORKERS (intra-op $INTRAOP)"; rule
   for W in $WORKERS; do
-    run "s1-cpu-mw${W}" "$CPU_PY" bench_step1_dataprep.py \
-        --env-tag "$CPU_TAG" --max-workers "$W" \
+    run "s1-${SIDE}-mw${W}" "$PY" bench_step1_dataprep.py \
+        --env-tag "$TAG" --max-workers "$W" \
         --filelist "$FILELIST" --source-dir "$FILE_ROOT" \
-        --phase HB1 --time-limit-s "$TIME_LIMIT" \
+        --intraop-threads "$INTRAOP" \
+        --phase "$PH1" --time-limit-s "$TIME_LIMIT" \
         --note "heavy-scaling"
   done
 fi
 
 # ==========================================================================
-# STEP 3 - embedding + FAISS indexing throughput vs num_workers (CPU)
+# STEP 3 - embedding + FAISS indexing throughput vs num_workers
 # ==========================================================================
 if [[ "$DO_STEP3" == "1" ]]; then
-  rule; say "STEP 3  indexing - CPU num_workers sweep: $WORKERS"; rule
+  rule; say "STEP 3  indexing - $SIDE num_workers sweep: $WORKERS (intra-op $INTRAOP)"; rule
   for W in $WORKERS; do
-    run "s3-cpu-nw${W}" "$CPU_PY" bench_step3_indexing.py \
-        --env-tag "$CPU_TAG" --num-workers "$W" \
+    run "s3-${SIDE}-nw${W}" "$PY" bench_step3_indexing.py \
+        --env-tag "$TAG" --num-workers "$W" \
         --filelist "$FILELIST" \
+        --intraop-threads "$INTRAOP" \
         --time-limit "$TIME_LIMIT" \
-        --phase HB3 --note "heavy-scaling"
+        --phase "$PH3" --note "heavy-scaling"
   done
 fi
 
 rule; say "DONE"; rule
 say "Results CSV : $BENCH_DIR/results/results.csv"
-say "Rows        : phase HB1 (Step1 max_workers sweep), phase HB3 (Step3 num_workers sweep)"
-say "Both stages are CPU-bound; throughput should rise to ~16 workers then flatten."
+say "Rows        : phase $PH1 (Step1 max_workers sweep), phase $PH3 (Step3 num_workers sweep)"
+say "intra-op $INTRAOP thread(s)/worker; with the cap on, throughput should hold"
+say "near the physical-core count instead of dropping at high worker counts."

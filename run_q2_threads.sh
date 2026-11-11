@@ -60,7 +60,7 @@ BENCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CPU_PY="${CPU_PY:-python}"
 FILELIST="${FILELIST:-filelists/mech500.txt}"
 WORKERS="${WORKERS:-8 12 16 24 32 40}"   # below / at / above 16 physical & 32 logical
-THREADS="${THREADS:-def 1 2}"            # def = default (no cap, the control)
+THREADS="${THREADS:-def 1 2}"            # def = uncapped control (passed as --intraop-threads 0)
 TIME_LIMIT="${TIME_LIMIT:-1200}"         # per-file embed time limit (s)
 CKPT="${CKPT:-}"                         # Step 3 SIGNAL checkpoint (or HOOPS_AI_CKPT)
 WARMUP="${WARMUP:-1}"
@@ -156,8 +156,11 @@ fi
 for T in $THREADS; do
   if [[ "$T" == "def" ]]; then
     rule; say "THREAD CAP = default (no cap)  -- control, expect the decline"; rule
+    # bench_step3's own default is now 1 thread/worker, so the uncapped control
+    # must pass --intraop-threads 0 explicitly to reproduce the old behaviour.
     for W in $WORKERS; do
       run "s3-tDEF-nw${W}" --env-tag "$CPU_TAG" --num-workers "$W" \
+          --intraop-threads 0 \
           --filelist "$FILELIST" --time-limit "$TIME_LIMIT" \
           --phase "$PHASE" --note "q2-threads it=default"
     done

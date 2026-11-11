@@ -19,12 +19,13 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import os
 import shutil
 import sys
 import traceback
 from pathlib import Path
 
-from bench_common import (BENCH_ROOT, PeakSampler, Timer, apply_license,
+from bench_common import (BENCH_ROOT, INTRAOP_ENV_VARS, PeakSampler, Timer, apply_license,
                           check_hoops_ai_importable, cuda_usable, make_run_id, peak_gpu_mb,
                           resolve_checkpoint, write_row)
 
@@ -60,6 +61,20 @@ def main() -> None:
 
     check_hoops_ai_importable()
     apply_license()
+
+    # Step 2 deliberately does NOT cap intra-op threads. CPU training runs as a
+    # single process that legitimately uses all cores' intra-op (BLAS/OpenMP)
+    # threads, so capping them would slow only the CPU side and invalidate the
+    # CPU-vs-GPU comparison. (The cap belongs to Steps 1 and 3, which run many
+    # worker processes that would otherwise oversubscribe the cores.) If a cap
+    # was inherited from the environment, warn -- but keep training -- so the
+    # operator knows the CPU number may be understated.
+    for _var in INTRAOP_ENV_VARS:
+        if os.environ.get(_var):
+            print(f"[step2] WARNING {_var}={os.environ[_var]} is set; this caps "
+                  "CPU intra-op threads and can slow CPU training. Step 2 does "
+                  "not cap intra-op threads itself (see the code comment).",
+                  flush=True)
 
     import torch
     torch.set_float32_matmul_precision(args.matmul_precision)
@@ -166,6 +181,7 @@ def main() -> None:
             "warm_start": not args.no_warm_start,
             "torch": torch.__version__,
             "torch_cuda": getattr(torch.version, "cuda", None),
+            "torch_num_threads": torch.get_num_threads(),
         },
         "note": args.note,
     }
