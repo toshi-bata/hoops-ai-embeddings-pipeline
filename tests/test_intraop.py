@@ -141,3 +141,27 @@ def test_run_pipeline_passes_cap_to_steps_1_and_3_but_not_step_2():
     assert "--intraop-threads" in step3
     assert "--intraop-threads" not in step2, (
         "run_pipeline must not pass --intraop-threads to step 2 training.")
+
+
+def test_run_pipeline_intraop_default_is_none():
+    # Default None means "do not override": each step then falls back to
+    # HOOPS_AI_INTRAOP_THREADS or its own default of 1.
+    src = (REPO_ROOT / "run_pipeline.py").read_text(encoding="utf-8")
+    assert "\"--intraop-threads\", type=int, default=None" in src
+
+
+def test_run_pipeline_only_passes_cap_when_explicitly_set():
+    # The flag must be appended conditionally, so omitting it on the CLI omits
+    # it from the step 1 / step 3 subprocess commands.
+    src = (REPO_ROOT / "run_pipeline.py").read_text(encoding="utf-8")
+
+    def block(start_marker: str, end_marker: str) -> str:
+        start = src.index(start_marker)
+        end = src.index(end_marker, start)
+        return src[start:end]
+
+    step1 = block("step1 = [", "run_step(\"step 1")
+    step3 = block("step3 = [", "run_step(\"step 3")
+    for blk in (step1, step3):
+        assert "if args.intraop_threads is not None:" in blk, (
+            "run_pipeline must append --intraop-threads only when it is set.")

@@ -114,7 +114,7 @@ Step 1(エンコード)と step 3(埋め込み+索引化)は多数の**ワーカ
 上記のスクリプトは、スイープハーネスが呼び出しているものでもある。1計測につき1プロセスを起動するので、CUDAコンテキスト/ワーカープール/アロケータの状態が実行間で漏れることはない。エントリポイントは2つ:
 
 - **`run_benchmark.ps1`**(Windows、ローカルマシン)-- フェーズ分割された時間予算付きスイープ:プローブ -> step 1の`max_workers`スイープ -> フルエンコード(両環境) -> step 2の`accelerator x batch_size x num_workers`マトリクス -> step 3の`num_workers`スイープ+フルインデックス構築 -> レポート。`-DryRun`、`-Unattended`(夜間実行:確認プロンプト無し、スリープ抑止、1計測がハングしても全体の予算を食い尽くさないためのハードなper-runタイムアウト)、`-Phases`に対応。
-- **`run_heavy_batch.sh`** / **`run_heavy_scaling.sh`**(AWS/Ubuntu、大規模コーパス)-- 同じ考え方を1万ファイル超の規模で:`run_heavy_batch.sh`はstep 1を1回(CPU、データセットを保持)実行してからstep 2をCPU vs GPUで実行し、両側が*同じ*モデルを学習するようにする。`run_heavy_scaling.sh`は代表的なサブセットに対してstep 1/3のワーカー数をスイープする。スケーリング用スクリプトは既定でワーカーあたりのintra-opスレッドを制限し(`INTRAOP`、0で上限なしの対照)、どちらの側でも実行でき(`SIDE=cpu|gpu`、GPUは`GPU_PY`が必要)、捨てるウォームアップを1本行う(`WARMUP`)。制限ありの実行はフェーズ`HC1`/`HC3`に(上限なしは従来どおり`HB1`/`HB3`)記録し、両者が混ざらないようにする。
+- **`run_heavy_batch.sh`** / **`run_heavy_scaling.sh`**(AWS/Ubuntu、大規模コーパス）-- 同じ考え方を1万ファイル超の規模で：`run_heavy_batch.sh`はstep 1を1回（CPU、データセットを保持）実行してからstep 2をCPU vs GPUで実行し、両側が*同じ*モデルを学習するようにする。`run_heavy_scaling.sh`は代表的なサブセットに対してstep 1/3のワーカー数をスイープする。スケーリング用スクリプトは既定でワーカーあたりのintra-opスレッドを制限し（`INTRAOP`、0で上限なしの対照）、どちらの側でも実行でき（`SIDE=cpu|gpu`、GPUは`GPU_PY`が必要）、まずコーパス全体をページキャッシュに事前読み込みし（`PRELOAD`）、先頭`WARMUP_N`ファイルで捨てるウォームアップを1本行う（`WARMUP`）――コールドキャッシュや初回固定コストが最初に走る点だけを不利にしないようにするため。制限ありの実行はフェーズ`HC1`/`HC3`に（上限なしは従来どおり`HB1`/`HB3`）記録し、両者が混ざらないようにする。
 
 結果はすべて`results/results.csv`(gitignore対象――CADファイルのパスを含みうるため)に書き込まれ、`make_report.py --lang en --scope {local,aws,both}`でそれを`results/REPORT_*.md/.html`に変換する。[`reports/`](reports/)配下に既にコミットされている2つのレポートは、このリポジトリの元になったCPU1.1/GPU1.1のノートPCおよびg6.8xlarge/L4での実行結果である――自分の`results.csv`ができたら、同じツールで自分のレポートを再生成すること。
 

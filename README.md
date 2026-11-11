@@ -259,9 +259,12 @@ runs. Two entry points:
   dataset so both sides train the *same* model; `run_heavy_scaling.sh` sweeps
   step 1/3 worker counts on a representative subset. The scaling script caps
   intra-op threads per worker by default (`INTRAOP`, 0 = uncapped control),
-  can run either side (`SIDE=cpu|gpu`, GPU needs `GPU_PY`), and does one
-  discarded warm-up (`WARMUP`). It writes capped runs to phases `HC1`/`HC3`
-  (uncapped stays on the original `HB1`/`HB3`) so the two never mix.
+  can run either side (`SIDE=cpu|gpu`, GPU needs `GPU_PY`), preloads the whole
+  corpus into the page cache first (`PRELOAD`) and does one discarded warm-up
+  on the first `WARMUP_N` files (`WARMUP`) so cold-cache and first-run costs
+  don't skew whichever point runs first. It writes capped runs to phases
+  `HC1`/`HC3` (uncapped stays on the original `HB1`/`HB3`) so the two never
+  mix.
 
 Results all land in `results/results.csv` (gitignored -- can contain your CAD
 file paths); `make_report.py --lang en --scope {local,aws,both}` turns it

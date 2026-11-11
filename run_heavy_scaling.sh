@@ -49,6 +49,8 @@
 #     INTRAOP=1            intra-op threads per worker (0 = uncapped control -> HB1/HB3)
 #     SIDE=cpu|gpu         which venv/device (gpu uses GPU_PY + gpu1.1 tag)
 #     WARMUP=1             do one discarded warm-up run first (phase WU)
+#     WARMUP_N=100         warm up on just the first N files (fixed first-run cost only)
+#     PRELOAD=1            read the whole corpus once into the page cache first
 #
 set -uo pipefail
 
@@ -64,6 +66,8 @@ CKPT="${CKPT:-}"                      # Step 3 SIGNAL checkpoint (or HOOPS_AI_CK
 INTRAOP="${INTRAOP:-1}"               # intra-op threads per worker (0 = uncapped control)
 SIDE="${SIDE:-cpu}"                   # cpu | gpu  (gpu uses GPU_PY + gpu1.1 tag)
 WARMUP="${WARMUP:-1}"                 # one discarded warm-up run first (phase WU)
+WARMUP_N="${WARMUP_N:-100}"           # warm up on just the first N files (fixed first-run cost)
+PRELOAD="${PRELOAD:-1}"               # read the whole corpus once into the page cache first
 DO_STEP1="${DO_STEP1:-1}"
 DO_STEP3="${DO_STEP3:-1}"
 CPU_TAG="cpu1.1"
@@ -140,7 +144,8 @@ say "filelist  : $FILELIST"
 say "side      : $SIDE   (py: $PY, tag: $TAG)"
 say "workers   : $WORKERS"
 say "intra-op  : $([[ $INTRAOP == 0 ]] && echo 'uncapped (control)' || echo "$INTRAOP thread(s)/worker")"
-say "warmup    : $([[ $WARMUP == 1 ]] && echo 'ON (phase WU, discarded)' || echo off)"
+say "preload   : $([[ $PRELOAD == 1 ]] && echo 'ON (read corpus into page cache)' || echo off)"
+say "warmup    : $([[ $WARMUP == 1 ]] && echo "ON (phase WU, first $WARMUP_N files, discarded)" || echo off)"
 say "step1     : $([[ $DO_STEP1 == 1 ]] && echo ON || echo off)  (phase $PH1, max_workers sweep)"
 say "step3     : $([[ $DO_STEP3 == 1 ]] && echo ON || echo off)  (phase $PH3, num_workers sweep)"
 say "ckpt      : ${CKPT:-<from HOOPS_AI_CKPT / resolve_checkpoint>}"
@@ -166,21 +171,62 @@ run() {  # label python script args...
 # First worker count in the sweep, used for the warm-up.
 WARMUP_W="$(set -- $WORKERS; echo "${1:-8}")"
 
-# One discarded warm-up: the first real run otherwise pays venv/lib load and a
-# first filesystem scan of the corpus, penalising whichever point runs first.
-# Written to phase WU so it never mixes with the HB*/HC* measurement rows.
+# Page-cache preload: just after an instance (re)start the corpus is cold on
+# EBS, so only the sweep's FIRST run pays the slow cold read and looks slower
+# than it is. Read every file once so all worker counts start from the same warm
+# page cache. Paths are resolved the way the harnesses do (bench_tasks.py): a
+# relative entry is taken under FILE_ROOT, an absolute entry as-is. The NUL
+# delimiter keeps paths with spaces intact.
+if [[ "$PRELOAD" == "1" ]]; then
+  rule; say "PRELOAD corpus into page cache"; rule
+  _pl_start=$(date +%s)
+  _pl_ok=0; _pl_miss=0; _pl_bytes=0
+  while IFS= read -r _rel || [[ -n "$_rel" ]]; do
+    [[ -z "$_rel" ]] && continue
+    case "$_rel" in
+      /*) _abs="$_rel" ;;
+      *)  _abs="$FILE_ROOT/$_rel" ;;
+    esac
+    if [[ -f "$_abs" ]]; then
+      _sz=$(stat -c %s "$_abs" 2>/dev/null || echo 0)
+      _pl_bytes=$(( _pl_bytes + _sz )); _pl_ok=$(( _pl_ok + 1 ))
+    else
+      _pl_miss=$(( _pl_miss + 1 ))
+    fi
+  done < "$FILELIST"
+  # Actually pull the bytes through the page cache (missing files just error on
+  # cat and are skipped; they are already counted above).
+  while IFS= read -r _rel || [[ -n "$_rel" ]]; do
+    [[ -z "$_rel" ]] && continue
+    case "$_rel" in
+      /*) printf '%s\0' "$_rel" ;;
+      *)  printf '%s\0' "$FILE_ROOT/$_rel" ;;
+    esac
+  done < "$FILELIST" | xargs -0 cat > /dev/null 2>/dev/null || true
+  _pl_sec=$(( $(date +%s) - _pl_start ))
+  _pl_mb=$(( _pl_bytes / 1024 / 1024 ))
+  say "[preload] read $_pl_ok files (~${_pl_mb} MB) in ${_pl_sec}s; $_pl_miss missing (skipped)"
+fi
+
+# One discarded warm-up on just the first WARMUP_N files: the first real run
+# otherwise pays venv/library load and other fixed first-run costs, penalising
+# whichever point runs first. A small subset is enough to pay those once (the
+# whole corpus does NOT need re-processing), so write the head of FILELIST to a
+# temp list and run that. Phase WU keeps it out of the HB*/HC* measurement rows.
 if [[ "$WARMUP" == "1" ]]; then
-  rule; say "WARM-UP (discarded, phase WU)"; rule
+  rule; say "WARM-UP (discarded, phase WU) - first $WARMUP_N files"; rule
+  WARMUP_FL="$LOG_DIR/warmup_filelist_${STAMP}.txt"
+  head -n "$WARMUP_N" "$FILELIST" > "$WARMUP_FL"
   if [[ "$DO_STEP3" == "1" ]]; then
     run "warmup-s3-nw${WARMUP_W}" "$PY" bench_step3_indexing.py \
         --env-tag "$TAG" --num-workers "$WARMUP_W" \
-        --filelist "$FILELIST" --time-limit "$TIME_LIMIT" \
+        --filelist "$WARMUP_FL" --time-limit "$TIME_LIMIT" \
         --intraop-threads "$INTRAOP" \
         --phase WU --note "heavy-scaling warmup discarded"
   elif [[ "$DO_STEP1" == "1" ]]; then
     run "warmup-s1-mw${WARMUP_W}" "$PY" bench_step1_dataprep.py \
         --env-tag "$TAG" --max-workers "$WARMUP_W" \
-        --filelist "$FILELIST" --source-dir "$FILE_ROOT" \
+        --filelist "$WARMUP_FL" --source-dir "$FILE_ROOT" \
         --intraop-threads "$INTRAOP" --time-limit-s "$TIME_LIMIT" \
         --phase WU --note "heavy-scaling warmup discarded"
   fi
