@@ -31,6 +31,44 @@ box.
 > hardened pipeline -- read the "Known pitfalls" section before pointing it
 > at data you care about.
 
+## What is not included
+
+The MIT license covers only the code in this repository. Not included, and not
+redistributed by this repository:
+
+- the HOOPS AI SDK (installed from Tech Soft 3D's package index and activated
+  with your own license key);
+- the pretrained checkpoint `ts3d_2M_hoops_embeddings_SIGNAL-preview.ckpt`;
+- any CAD data.
+
+The HOOPS AI SDK and the checkpoint are governed by your own agreement with
+Tech Soft 3D; what you may redistribute depends on those terms -- check them
+rather than taking anything here as the answer.
+
+## Benchmark dataset
+
+The AWS reports in [`reports/`](reports/) use TMCAD v2 (Truly Mechanical CAD
+Dataset), the dataset the HOOPS AI tutorials use for embeddings indexing. In
+this repository's scripts and reports it appears under the local folder name
+`mechcad`.
+
+> Zou, Q., & Zhu, L. (2025). Bringing attention to CAD: Boundary representation
+> learning via transformer. Computer-Aided Design, 103940. Elsevier.
+
+Download / documentation:
+
+- https://pan.zju.edu.cn/share/218d10a88e8c18f5b96e94a7e0
+- https://github.com/Qiang-Zou/BRT/blob/main/DATASET.md
+
+Released by its authors under the GPL-3.0 license. This repository contains none
+of its files; download it yourself and point the scripts at it (`FILE_ROOT` /
+`--source-dir`). The 10,715-file list used for the reports is the dataset minus
+183 files that an earlier full registration pass classified as heavy or failed;
+`filelists/` is not committed. To build an equivalent list from your own
+registration report (the "Add Folder" report written by hoops_ai_qt_sandbox),
+run `make_filelist_from_log.py` with `--exclude "HEAVY|FAILED"` -- its default
+excludes only FAILED, which keeps the heavy files in.
+
 ## Prerequisites
 
 This describes the state your CPU-build and GPU-build venvs need to be in --

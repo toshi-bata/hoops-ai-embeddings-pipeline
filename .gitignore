@@ -19,6 +19,9 @@ bench_parts/
 .env
 *.pem
 
+# Agent/tooling scratch (not part of the repo)
+.claude/
+
 # Python
 __pycache__/
 *.pyc

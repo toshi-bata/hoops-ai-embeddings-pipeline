@@ -14,6 +14,30 @@ HOOPS AI embeddingsワークフロー――CADファイルのフォルダを**�
 
 > **これはサンプル/ベンチマークコードであり、製品ではない。** HOOPS AI embeddingsワークフローを自動化するための妥当な出発点ではあるが、堅牢化されたパイプラインではない――気にするデータを対象に使う前に「既知の落とし穴」節を読むこと。
 
+## 同梱しないもの
+
+MITライセンスが対象とするのは、このリポジトリ内のコードのみ。以下は同梱しておらず、このリポジトリでは再配布しない:
+
+- HOOPS AI SDK(Tech Soft 3Dのパッケージインデックスからインストールし、自分のライセンスキーで有効化する);
+- 学習済みチェックポイント`ts3d_2M_hoops_embeddings_SIGNAL-preview.ckpt`;
+- 一切のCADデータ。
+
+HOOPS AI SDKとチェックポイントは、各自とTech Soft 3Dとの契約に従う。何を再配布できるかはその条件次第であり――ここに書かれている内容を答えとみなさず、その条件を自分で確認すること。
+
+## ベンチマークデータセット
+
+[`reports/`](reports/)のAWSレポートは、HOOPS AIチュートリアルが埋め込みインデックス化に使っているデータセットであるTMCAD v2(Truly Mechanical CAD Dataset)を使用している。このリポジトリのスクリプトやレポートでは、ローカルのフォルダ名`mechcad`として登場する。
+
+> Zou, Q., & Zhu, L. (2025). Bringing attention to CAD: Boundary representation
+> learning via transformer. Computer-Aided Design, 103940. Elsevier.
+
+ダウンロード / ドキュメント:
+
+- https://pan.zju.edu.cn/share/218d10a88e8c18f5b96e94a7e0
+- https://github.com/Qiang-Zou/BRT/blob/main/DATASET.md
+
+作者によりGPL-3.0ライセンスで公開されている。このリポジトリはそのファイルを一切含まない。自分でダウンロードし、スクリプトにその場所を指定すること(`FILE_ROOT` / `--source-dir`)。レポートで使った10,715ファイルのリストは、以前のフル登録パスでheavyまたはfailedに分類された183ファイルを、データセットから除いたものである。`filelists/`はコミットしていない。同等のリストを作るには、自分の登録レポート(hoops_ai_qt_sandboxが出力する "Add Folder" レポート)に対して`make_filelist_from_log.py`を`--exclude "HEAVY|FAILED"`付きで実行する――既定では FAILED しか除外しないため、heavy のファイルが残ってしまう。
+
 ## 前提条件
 
 これは、CPU用ビルド/GPU用ビルドのvenvが満たしているべき状態の説明である――既にHOOPS AI SDKのセットアップ済み環境(HOOPS AI自身のセットアップ手順に沿ったもの)があり`hoops_ai`がimportできるなら、以下はおそらく既に満たされているので、下のQuickstartへ進んでよい。以下のコマンドが関係してくるのは、venvをゼロから作る場合(新しいマシン上で、あるいは`cdk/`経由――そちらはCPU/GPUのpipインストールを自動的に行う)である。
