@@ -60,6 +60,19 @@ project's deploy pattern.
 | `keyName` | (none) | existing EC2 key pair name; omit to use Session Manager instead |
 | `repoUrl` | this repo's GitHub URL | repo cloned into `~/bench` on the instance. Env var `HOOPS_AI_PIPELINE_REPO_URL` also works |
 | `hoopsAiLicense` | (none) | license key, written to `~/bench/.env` on the instance. Env var `HOOPS_AI_LICENSE` also works |
+| `hoopsAiVersion` | (none = newest) | pin the `hoops-ai` version installed in both venvs, e.g. `1.1.1`. Omit for the newest build |
+| `torchVersion` | (none = newest) | pin the `torch` version installed in both venvs, e.g. `2.9.1` (the matching cpu / cu130 build is chosen per venv). Omit for the newest build |
+
+> **Reproducing the `reports/REPORT_aws.*` environment.** Those numbers were
+> measured on hoops_ai 1.1.1 / torch 2.9.1. Pin both to rebuild that setup:
+>
+> ```powershell
+> npx cdk deploy -c keyName=<your-key-pair> -c allowedSshCidr=<your-ip>/32 -c hoopsAiVersion=1.1.1 -c torchVersion=2.9.1
+> ```
+>
+> Because user-data drives `userDataCausesReplacement`, changing either value
+> and redeploying **replaces the instance** (a fresh box built with the pinned
+> versions), so you benchmark on exactly that environment.
 
 ### Find your IP for `allowedSshCidr`
 

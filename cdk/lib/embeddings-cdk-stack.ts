@@ -54,6 +54,35 @@ export class EmbeddingsBenchStack extends cdk.Stack {
       process.env.HOOPS_AI_PIPELINE_REPO_URL ??
       'https://github.com/toshi-bata/hoops-ai-embeddings-pipeline.git';
 
+    // Optional version pins for hoops-ai and torch. Omitted => unversioned
+    // (whatever is newest the day the instance is built), the original
+    // behaviour. Set both to reproduce a past benchmark environment, e.g.
+    // reports/REPORT_aws.* was measured on hoops_ai 1.1.1 / torch 2.9.1.
+    // These values are spliced verbatim into user-data.sh and thus into a
+    // shell command, so validate them before synth: allow only a leading
+    // digit followed by version-safe characters ([0-9A-Za-z.+-]). This
+    // rejects quotes, spaces and shell metacharacters (';', '$', '`', ...),
+    // so the single-quoted export below cannot be broken out of.
+    const hoopsAiVersionRaw = this.node.tryGetContext('hoopsAiVersion') as string | undefined;
+    const torchVersionRaw = this.node.tryGetContext('torchVersion') as string | undefined;
+    // Treat an empty / whitespace-only value (e.g. `-c hoopsAiVersion=`) as
+    // "not set" => unversioned, same as omitting the key entirely.
+    const normalizeVersion = (v: string | undefined): string | undefined =>
+      v !== undefined && v.trim() !== '' ? v.trim() : undefined;
+    const hoopsAiVersion = normalizeVersion(hoopsAiVersionRaw);
+    const torchVersion = normalizeVersion(torchVersionRaw);
+    const versionPattern = /^[0-9][0-9A-Za-z.+-]*$/;
+    const validateVersion = (label: string, value: string | undefined): void => {
+      if (value !== undefined && !versionPattern.test(value)) {
+        throw new Error(
+          `Invalid ${label} '${value}': expected a version like 1.1.1 ` +
+            `matching ${versionPattern} (digits/letters/'.'/'+'/'-' only).`,
+        );
+      }
+    };
+    validateVersion('hoopsAiVersion', hoopsAiVersion);
+    validateVersion('torchVersion', torchVersion);
+
     // ------------------------------------------------------------------
     // Networking: minimal public VPC (single AZ, no NAT to keep cost down)
     // ------------------------------------------------------------------
@@ -116,9 +145,13 @@ export class EmbeddingsBenchStack extends cdk.Stack {
     // check would see it unset and do nothing -- no error, so this is easy
     // to miss until you notice ~/bench is empty). Splice the export in right
     // after the shebang line instead, so it's set before anything else runs.
+    // HOOPS_AI_VERSION / TORCH_VERSION ride along the same way (empty when
+    // unset => user-data.sh installs the newest build, as before).
     const userDataScript = rawUserDataScript.replace(
       /^(#!.*\n)/,
-      `$1export BENCH_REPO_URL='${repoUrl}'\n`,
+      `$1export BENCH_REPO_URL='${repoUrl}'\n` +
+        `export HOOPS_AI_VERSION='${hoopsAiVersion ?? ''}'\n` +
+        `export TORCH_VERSION='${torchVersion ?? ''}'\n`,
     );
     const userData = ec2.UserData.custom(userDataScript);
 

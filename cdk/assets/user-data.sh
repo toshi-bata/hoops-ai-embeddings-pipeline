@@ -82,23 +82,42 @@ fi
 #    notebooks, the converter) plus the matching torch build, per the
 #    official pip install docs (both --extra-index-urls are required
 #    together: one for hoops-ai's own packages, one for the torch build).
+#    HOOPS_AI_VERSION / TORCH_VERSION are exported by the CDK stack (empty =>
+#    newest). When set they pin the install so a benchmark environment can be
+#    rebuilt exactly (e.g. reports/REPORT_aws.* used hoops_ai 1.1.1 /
+#    torch 2.9.1). Pinning torch in the SAME pip command lets each venv pick
+#    that version's build from its own --extra-index-url (cpu / cu130).
 sudo -u "$BENCH_USER" python3 -m venv "$SDK_ROOT/CPU1.1/.venv"
 sudo -u "$BENCH_USER" "$SDK_ROOT/CPU1.1/.venv/bin/pip" install --upgrade pip
-sudo -u "$BENCH_USER" "$SDK_ROOT/CPU1.1/.venv/bin/pip" install "hoops-ai[all]" \
+sudo -u "$BENCH_USER" "$SDK_ROOT/CPU1.1/.venv/bin/pip" install \
+    "hoops-ai[all]${HOOPS_AI_VERSION:+==$HOOPS_AI_VERSION}" \
+    ${TORCH_VERSION:+torch==$TORCH_VERSION} \
     --extra-index-url https://packages.techsoft3d.com/pip \
     --extra-index-url https://download.pytorch.org/whl/cpu
 if [[ -f "$BENCH_DIR/requirements.txt" ]]; then
   sudo -u "$BENCH_USER" "$SDK_ROOT/CPU1.1/.venv/bin/pip" install -r "$BENCH_DIR/requirements.txt"
 fi
+# Record the resolved versions in the cloud-init log for later verification.
+sudo -u "$BENCH_USER" "$SDK_ROOT/CPU1.1/.venv/bin/python" - <<'PYEOF' || true
+import importlib.metadata as m, torch
+print(f"[versions][CPU1.1] hoops_ai={m.version('hoops_ai')} torch={torch.__version__}")
+PYEOF
 
 sudo -u "$BENCH_USER" python3 -m venv "$SDK_ROOT/GPU1.1/.venv"
 sudo -u "$BENCH_USER" "$SDK_ROOT/GPU1.1/.venv/bin/pip" install --upgrade pip
-sudo -u "$BENCH_USER" "$SDK_ROOT/GPU1.1/.venv/bin/pip" install "hoops-ai[all]" \
+sudo -u "$BENCH_USER" "$SDK_ROOT/GPU1.1/.venv/bin/pip" install \
+    "hoops-ai[all]${HOOPS_AI_VERSION:+==$HOOPS_AI_VERSION}" \
+    ${TORCH_VERSION:+torch==$TORCH_VERSION} \
     --extra-index-url https://packages.techsoft3d.com/pip \
     --extra-index-url https://download.pytorch.org/whl/cu130
 if [[ -f "$BENCH_DIR/requirements.txt" ]]; then
   sudo -u "$BENCH_USER" "$SDK_ROOT/GPU1.1/.venv/bin/pip" install -r "$BENCH_DIR/requirements.txt"
 fi
+# Record the resolved versions in the cloud-init log for later verification.
+sudo -u "$BENCH_USER" "$SDK_ROOT/GPU1.1/.venv/bin/python" - <<'PYEOF' || true
+import importlib.metadata as m, torch
+print(f"[versions][GPU1.1] hoops_ai={m.version('hoops_ai')} torch={torch.__version__}")
+PYEOF
 
 mkdir -p "$BENCH_HOME/dataset"
 chown -R "$BENCH_USER":"$BENCH_USER" "$BENCH_HOME"

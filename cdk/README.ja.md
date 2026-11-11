@@ -39,6 +39,16 @@ HOOPS AI embeddingsの3ステップパイプライン(encode / train / index)を
 | `keyName` | (なし) | 既存のEC2キーペア名。省略するとSession Managerを使う |
 | `repoUrl` | このリポジトリのGitHub URL | インスタンス上の`~/bench`にcloneされるリポジトリ。環境変数`HOOPS_AI_PIPELINE_REPO_URL`でも指定可 |
 | `hoopsAiLicense` | (なし) | ライセンスキー。インスタンス上の`~/bench/.env`に書き込まれる。環境変数`HOOPS_AI_LICENSE`でも指定可 |
+| `hoopsAiVersion` | (なし = 最新版) | 両venvにインストールする`hoops-ai`のバージョンを固定する(例: `1.1.1`)。省略時は最新版 |
+| `torchVersion` | (なし = 最新版) | 両venvにインストールする`torch`のバージョンを固定する(例: `2.9.1`。各venvの cpu / cu130 に合ったビルドが選ばれる)。省略時は最新版 |
+
+> **`reports/REPORT_aws.*`の条件を再現する場合。** これらの数値は hoops_ai 1.1.1 / torch 2.9.1 で測定したもの。両方を固定すればその環境を再構築できる:
+>
+> ```powershell
+> npx cdk deploy -c keyName=<your-key-pair> -c allowedSshCidr=<your-ip>/32 -c hoopsAiVersion=1.1.1 -c torchVersion=2.9.1
+> ```
+>
+> user-dataが`userDataCausesReplacement`を駆動するため、いずれかの値を変えて再デプロイすると**インスタンスは作り直される**(固定したバージョンでまっさらなマシンが構築される)。これにより、まさにその環境でベンチマークできる。
 
 ### `allowedSshCidr`用に自分のIPを調べる
 
