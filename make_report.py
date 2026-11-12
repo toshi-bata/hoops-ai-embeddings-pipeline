@@ -670,6 +670,16 @@ def _worker_scaling_overlay(sel: list[dict], step: str, param: str, title: str,
                               for r in ugroup if tof(r))
         cap_t = dict(capped_pts)
         unc_t = dict(uncapped_pts)
+        # Does the uncapped series actually get worse past its own peak? (a
+        # point at a higher worker count than the uncapped best that is >5%
+        # slower). Only then is the "collapse" / "oversubscription, not RAM"
+        # framing true; on Step 1 the uncapped series peaks at the same worker
+        # count as the capped one, so we must not claim a collapse there.
+        unc_declines = False
+        if uncapped_pts:
+            ubn, ubt = min(uncapped_pts, key=lambda p: p[1])
+            unc_declines = any(n > ubn and t > ubt * 1.05
+                               for n, t in uncapped_pts)
         cap_rss = {int(float(r["param_value"])): r.get("peak_rss_mb")
                    for r in cgroup}
         unc_rss = {int(float(r["param_value"])): r.get("peak_rss_mb")
@@ -766,12 +776,20 @@ def _worker_scaling_overlay(sel: list[dict], step: str, param: str, title: str,
                                f"最適ワーカー数はコア数に一致している。")
                 elif logi and bn == logi:
                     msg_en += (f" This equals the machine's **{logi} logical "
-                               f"processors** - with the per-worker thread cap "
-                               f"in place, throughput keeps rising to the logical "
-                               f"core count instead of collapsing.")
+                               f"processors**")
                     msg_ja += (f" これはテストマシンの**論理プロセッサ数 {logi}** と"
-                               f"等しい - ワーカーごとのスレッド上限により、崩壊せず"
-                               f"論理コア数までスループットが伸び続ける。")
+                               f"等しい")
+                    if unc_declines:
+                        msg_en += (" - with the per-worker thread cap in place, "
+                                   "throughput keeps rising to the logical core "
+                                   "count instead of collapsing.")
+                        msg_ja += ("。ワーカーごとのスレッド上限により、崩壊せず"
+                                   "論理コア数までスループットが伸び続ける。")
+                    else:
+                        msg_en += (" - throughput keeps rising to the logical "
+                                   "core count, with or without the cap.")
+                        msg_ja += ("。キャップの有無にかかわらず、スループットは"
+                                   "論理コア数まで伸び続ける。")
             out.append(L(msg_en, msg_ja))
 
         # Step 3: peak-of-capped vs peak-of-uncapped (the headline gain).
@@ -787,37 +805,82 @@ def _worker_scaling_overlay(sel: list[dict], step: str, param: str, title: str,
                 f"({param}={cp_n})、キャップなしのピークは {up_t:.1f} s "
                 f"({param}={up_n}) - 各最適設定どうしで **{up_t / cp_t:.2f}倍** 高速。"))
 
-        # RAM is not the cause: peak RSS is near-identical capped vs uncapped.
+        # Step 1 case (uncapped does not decline): state the facts instead of
+        # claiming a collapse - uncapped peaks at the same worker count and
+        # capping only shifts times by a few percent (run-to-run noise).
+        if not unc_declines and uncapped_pts and capped_pts:
+            ubn2, _ = min(uncapped_pts, key=lambda p: p[1])
+            cbn2, _ = min(capped_pts, key=lambda p: p[1])
+            diffs = [(unc_t[n] - cap_t[n]) / unc_t[n] * 100.0
+                     for n in sorted(set(cap_t) & set(unc_t))
+                     if unc_t.get(n) and cap_t.get(n)]
+            if diffs:
+                lo, hi = min(diffs), max(diffs)
+                out.append(L(
+                    f"\n_Uncapped and capped both peak at {param}={cbn2}"
+                    + (f" (uncapped {param}={ubn2})" if ubn2 != cbn2 else "")
+                    + f"; capping shifts the per-setting times by only "
+                    f"{lo:+.1f}..{hi:+.1f}% (positive = capped faster) - "
+                    f"run-to-run noise, not a real gain here._\n",
+                    f"\n_キャップなし・ありともピークは {param}={cbn2}"
+                    + (f"（キャップなしは {param}={ubn2}）" if ubn2 != cbn2 else "")
+                    + f"。キャップによる各設定の時間差は {lo:+.1f}〜{hi:+.1f}%"
+                    f"（正=キャップありが速い）に過ぎず、実質的な改善ではなく"
+                    f"実行ごとのばらつきの範囲。_\n"))
+
+        # Peak RSS: near-identical capped vs uncapped. Only draw the "the
+        # decline is oversubscription, not RAM" conclusion when there is an
+        # actual uncapped decline to explain (Step 3); otherwise state the fact.
         shared = sorted(set(n for n in cap_rss if cap_rss.get(n))
                         & set(n for n in unc_rss if unc_rss.get(n)))
         if shared:
             n = shared[-1]
-            out.append(L(
-                f"\n_Peak RSS is essentially the same with and without the cap "
-                f"({param}={n}: capped {cap_rss[n]:.0f} vs uncapped "
-                f"{unc_rss[n]:.0f} MB), so the uncapped decline is CPU-thread "
-                f"oversubscription, not RAM pressure._\n",
-                f"\n_ピークRSSはキャップの有無でほぼ同じ"
-                f"（{param}={n}: キャップあり {cap_rss[n]:.0f} vs なし "
-                f"{unc_rss[n]:.0f} MB）であり、キャップなしの低下はCPUスレッドの"
-                f"過剰割り当てが原因で、RAMの逼迫ではない。_\n"))
+            if unc_declines:
+                out.append(L(
+                    f"\n_Peak RSS is essentially the same with and without the "
+                    f"cap ({param}={n}: capped {cap_rss[n]:.0f} vs uncapped "
+                    f"{unc_rss[n]:.0f} MB), so the uncapped decline is CPU-thread "
+                    f"oversubscription, not RAM pressure._\n",
+                    f"\n_ピークRSSはキャップの有無でほぼ同じ"
+                    f"（{param}={n}: キャップあり {cap_rss[n]:.0f} vs なし "
+                    f"{unc_rss[n]:.0f} MB）であり、キャップなしの低下はCPUスレッドの"
+                    f"過剰割り当てが原因で、RAMの逼迫ではない。_\n"))
+            else:
+                out.append(L(
+                    f"\n_Peak RSS is essentially the same with and without the "
+                    f"cap ({param}={n}: capped {cap_rss[n]:.0f} vs uncapped "
+                    f"{unc_rss[n]:.0f} MB)._\n",
+                    f"\n_ピークRSSはキャップの有無でほぼ同じ"
+                    f"（{param}={n}: キャップあり {cap_rss[n]:.0f} vs なし "
+                    f"{unc_rss[n]:.0f} MB）。_\n"))
 
         # Amdahl fit on the capped/primary series.
         f = amdahl_serial_fraction(capped_pts)
         if f is not None and len(capped_pts) >= 3:
             max_speedup = 1 / f
             n80 = (1 - f) / (f * (1 / 0.8 - 1))
+            cores = env_cores(env_tag, scope)
+            logi = cores[1] if cores else None
+            if logi and n80 > logi:
+                n80_en = f"beyond this machine's {logi} logical processors"
+                n80_ja = f"本マシンの論理プロセッサ数 {logi} を超える位置"
+            else:
+                n80_en = f"{param} = {n80:.0f}"
+                n80_ja = f"{param} = {n80:.0f}"
+            few_en = (f" (only {len(capped_pts)} points - indicative only)"
+                      if len(capped_pts) < 4 else "")
+            few_ja = (f"（{len(capped_pts)} 点のみ - 目安）"
+                      if len(capped_pts) < 4 else "")
             out.append(L(
                 f"\nAmdahl fit over {param}={capped_pts[0][0]}.."
-                f"{capped_pts[-1][0]} (capped): serial fraction f = "
+                f"{capped_pts[-1][0]} (capped){few_en}: serial fraction f = "
                 f"**{f * 100:.1f}%**, so the asymptotic ceiling is "
                 f"{max_speedup:.1f}x no matter how many workers you add. "
-                f"Roughly {param} = {n80:.0f} reaches 80% of that ceiling.",
+                f"Roughly {n80_en} reaches 80% of that ceiling.",
                 f"\nアムダール則フィット ({param}={capped_pts[0][0]}.."
-                f"{capped_pts[-1][0]}、キャップあり): 直列成分 f = "
+                f"{capped_pts[-1][0]}、キャップあり){few_ja}: 直列成分 f = "
                 f"**{f * 100:.1f}%**。ワーカーをいくら増やしても漸近的な上限は "
-                f"{max_speedup:.1f}倍。おおよそ {param} = {n80:.0f} で"
-                f"その上限の80%に到達する。"))
+                f"{max_speedup:.1f}倍。おおよそ {n80_ja} でその上限の80%に到達する。"))
         out.append("")
 
     if not rendered:
@@ -931,8 +994,10 @@ def training_section(rows: list[dict]) -> list[str]:
                 f"(`Data extraction error: division by zero`). The identical "
                 f"files embed without error in Step 3 (`embed_shape_batch` had 0 "
                 f"failures in every run), so the fault is specific to Step 1's "
-                f"extraction. Because the set is deterministic it can be dropped "
-                f"up front, and the model trained on the **{n_ok:,} successes**. "
+                f"extraction. Because the set is deterministic it could be "
+                f"dropped up front; these runs left it in the list, so Step 1 "
+                f"still failed on it, and the model trained on the "
+                f"**{n_ok:,} successes**. "
                 f"(These are separate from the **183 files pre-excluded** from "
                 f"the list as HEAVY/FAILED by an earlier registration pass.)\n",
                 f"**投入数 vs 学習数。** {n_full:,}ファイルは*投入*数。Step 1 の"
@@ -943,7 +1008,8 @@ def training_section(rows: list[dict]) -> list[str]:
                 f"失敗はすべて同一のエラー（`Data extraction error: division by "
                 f"zero`）。同じファイルは Step 3（`embed_shape_batch`）では"
                 f"エラーなく埋め込まれ（全runで失敗0）、問題は Step 1 の抽出に"
-                f"固有である。集合が決定的なので事前に除外でき、モデルは "
+                f"固有である。集合が決定的なので事前に除外できるが、これらのrunは"
+                f"リストに残したまま実行したため Step 1 で失敗し、モデルは "
                 f"**{n_ok:,}件の成功分**で学習されている。（これらは、以前の登録パスで "
                 f"HEAVY/FAILED に分類され**事前に除外した 183 ファイル**とは別物。）\n"))
             brk = step1_failure_breakdown()
@@ -1155,17 +1221,23 @@ def step3_cpu_gpu_section(rows: list[dict]) -> list[str]:
         "更新版ビルドでの再測定が必要。\n")
 
     out = [f"### {L('CPU vs GPU', 'CPU vs GPU')}\n"]
-    faster = L("faster", "高速") if gpu_pt < cpu_pt else L("slower", "低速")
+    ratio = cpu_pt / gpu_pt
+    close = abs(cpu_pt - gpu_pt) / max(cpu_pt, gpu_pt) < 0.05
+    tail_en = (" - parity, within run-to-run noise. " if close
+               else (" (i.e. faster). " if gpu_pt < cpu_pt
+                     else " (i.e. slower). "))
+    tail_ja = ("（実行ごとのノイズの範囲内＝ほぼ同等）。" if close
+               else ("（つまり高速）。" if gpu_pt < cpu_pt else "（つまり低速）。"))
     out.append(L(
         f"**Step 3 indexing is CPU-bound - the GPU gives no benefit.** At each "
         f"platform's peak, CPU {cpu_pt:.1f} s (num_workers={cpu_pn}) vs GPU "
         f"{gpu_pt:.1f} s (num_workers={gpu_pn}): the GPU install is "
-        f"**{cpu_pt / gpu_pt:.2f}x** the CPU throughput (i.e. {faster}). "
+        f"**{ratio:.2f}x** the CPU throughput" + tail_en
         + note_en,
         f"**Step 3 の索引化もCPUバウンドで、GPUの恩恵はない。** 各プラットフォームの"
         f"ピークで、CPU {cpu_pt:.1f} s (num_workers={cpu_pn}) vs GPU "
         f"{gpu_pt:.1f} s (num_workers={gpu_pn}): GPUインストールはCPUの "
-        f"**{cpu_pt / gpu_pt:.2f}倍** のスループット（つまり{faster}）。"
+        f"**{ratio:.2f}倍** のスループット" + tail_ja
         + note_ja))
 
     common = sorted(set(cpu) & set(gpu))
@@ -1187,10 +1259,12 @@ def step3_cpu_gpu_section(rows: list[dict]) -> list[str]:
         out.append(L(
             "_Highlighted: each platform's peak (CPU num_workers=" f"{cpu_pn}, "
             f"GPU num_workers={gpu_pn}). GPU speedup = CPU time / GPU time; "
-            "below 1.00x means the GPU install is slower._\n",
+            "values within 0.95-1.05x are parity (run-to-run noise), not a real "
+            "device win or loss._\n",
             f"_ハイライト: 各プラットフォームのピーク（CPU num_workers={cpu_pn}、"
             f"GPU num_workers={gpu_pn}）。GPU速度向上 = CPU時間 / GPU時間。"
-            "1.00x未満はGPUインストールの方が遅いことを意味する。_\n"))
+            "0.95〜1.05x はほぼ同等（実行ごとのノイズ）であり、デバイスによる"
+            "優劣ではない。_\n"))
     return out
 
 
@@ -1541,6 +1615,51 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
     _gx = f"{gpu_x:.1f}" if gpu_x else "?"
     _cs = f"{cpu_spe:.0f}" if cpu_spe else "?"
     _gs = f"{gpu_spe:.0f}" if gpu_spe else "?"
+
+    # Data-driven Step 1 / Step 3 headline for the first summary bullet, so the
+    # prose tracks the measured sweeps (capped HC vs uncapped HB, CPU vs GPU).
+    def _cpu_peak(step: str, phase: str):
+        best = None
+        for r in rows:
+            if (r["step"] == step and r.get("phase") == phase
+                    and r["env_tag"] == "cpu1.1"):
+                t = encode_seconds(r) if step == "dataprep" else r["wall_s"]
+                if t and (best is None or t < best[1]):
+                    best = (int(float(r["param_value"])), t)
+        return best
+
+    def _time_at(step: str, phase: str, env: str, n: int):
+        for r in rows:
+            if (r["step"] == step and r.get("phase") == phase
+                    and r["env_tag"] == env
+                    and int(float(r["param_value"])) == n):
+                return encode_seconds(r) if step == "dataprep" else r["wall_s"]
+        return None
+
+    def _parity(step: str, phase: str, n: int):
+        c = _time_at(step, phase, "cpu1.1", n)
+        g = _time_at(step, phase, "gpu1.1", n)
+        return (c / g) if (c and g) else None
+
+    def _cap_effect_range(step: str, cap_phase: str, unc_phase: str):
+        pcts = []
+        for r in rows:
+            if (r["step"] == step and r.get("phase") == cap_phase
+                    and r["env_tag"] == "cpu1.1"):
+                n = int(float(r["param_value"]))
+                ct = encode_seconds(r) if step == "dataprep" else r["wall_s"]
+                ut = _time_at(step, unc_phase, "cpu1.1", n)
+                if ct and ut:
+                    pcts.append(abs(ut - ct) / ut * 100.0)
+        return (min(pcts), max(pcts)) if pcts else None
+
+    s1_cap = _cpu_peak("dataprep", "HC1")
+    s1_unc = _cpu_peak("dataprep", "HB1")
+    s3_cap = _cpu_peak("indexing", "HC3")
+    s3_unc = _cpu_peak("indexing", "HB3")
+    s1_parity = _parity("dataprep", "HC1", s1_cap[0]) if s1_cap else None
+    s3_parity = _parity("indexing", "HC3", s3_cap[0]) if s3_cap else None
+    s1_eff = _cap_effect_range("dataprep", "HC1", "HB1")
     if is_aws:
         title = L("# HOOPS AI 1.1 benchmark (AWS EC2) - CPU vs GPU",
                   "# HOOPS AI 1.1 ベンチマーク (AWS EC2) - CPU vs GPU")
@@ -1571,14 +1690,70 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
             "Dataset: `parts500` failure-free 500-part sample.",
             "マシン: **ローカル Windows ノートPC**（Intel 14コア + RTX 2000 Ada）。"
             "データセット: `parts500`（失敗のない500パーツのサンプル）。")
+    # Raw-data line: name the CSV(s) actually read (filenames, not full paths);
+    # keep the historical default text when --csv was not used.
+    if list(CSV_PATHS) == [CSV_PATH]:
+        raw_src = "`results/results.csv`"
+    else:
+        raw_src = ", ".join(f"`{p.name}`" for p in CSV_PATHS)
+
+    # First summary bullet: on AWS, driven by the measured sweeps; elsewhere the
+    # original generic description.
+    generic_first = L(
+        "- **Step 1 (encoding) and Step 3 (embedding + indexing) are "
+        "CPU-bound** - the GPU sits idle, so the GPU install buys nothing. "
+        "Step 1 throughput scales with worker count up to roughly the "
+        "machine's physical core count, then flattens; Step 3 peaks at a "
+        "lower worker count and then *declines* as more workers are added, "
+        "because each worker process spawns its own pool of CPU compute "
+        "(intra-op) threads: past a low worker count the total thread count far "
+        "exceeds the machine's cores, and that CPU-thread oversubscription - not "
+        "RAM or file-descriptor pressure - is what slows every worker down.",
+        "- **Step 1（エンコード）と Step 3（埋め込み + 索引化）はCPUバウンド** "
+        "— GPUはアイドルで、GPUインストールの恩恵はない。Step 1 のスループットは"
+        "ワーカー数に応じて物理コア数付近まで向上し、その後は頭打ち。Step 3 はより"
+        "少ないワーカー数でピークに達し、それ以上増やすと*低下*する — 各ワーカー"
+        "プロセスが独自のCPU計算（intra-op）スレッド群を起動するため、少数のワーカーを"
+        "超えると総スレッド数がコア数を大きく上回り、そのCPUスレッドの過剰割り当て"
+        "（RAM やファイルディスクリプタの負荷ではなく）が全ワーカーを遅くするため。")
+    if is_aws and s1_cap and s1_unc and s3_cap and s3_unc and s1_eff \
+            and s1_parity and s3_parity:
+        lo, hi = s1_eff
+        first_bullet = L(
+            "- **Step 1 (encoding) and Step 3 (embedding + indexing) are "
+            "CPU-bound** - the GPU install is no faster (both steps run at "
+            f"~{s1_parity:.2f}x the CPU at matched worker counts, i.e. parity "
+            "within run-to-run noise). **Step 1** scales with worker count up "
+            f"to **max_workers={s1_cap[0]}** (the machine's logical-processor "
+            "count) with or without the thread cap - capping changes per-setting "
+            f"times by only {lo:.0f}-{hi:.0f}% (run-to-run noise). **Step 3** "
+            "behaves differently: uncapped (Sep) it peaks early at "
+            f"**num_workers={s3_unc[0]}** and then *declines* as more workers "
+            "are added, because each worker spawns its own pool of CPU "
+            "(intra-op) threads and the total thread count outruns the cores; "
+            f"capping to 1 thread/worker (Nov) removes that decline and "
+            f"throughput keeps rising to **num_workers={s3_cap[0]}**.",
+            "- **Step 1（エンコード）と Step 3（埋め込み + 索引化）はCPUバウンド** "
+            "— GPUインストールでも速くならない（両ステップとも同じワーカー数で "
+            f"約{s1_parity:.2f}x ＝ 実行ごとのノイズの範囲でほぼ同等）。**Step 1** は"
+            f"キャップの有無にかかわらず **max_workers={s1_cap[0]}**（本マシンの論理"
+            "プロセッサ数）まで伸びる — キャップによる各設定の時間差は "
+            f"{lo:.0f}〜{hi:.0f}%（実行ごとのばらつき程度）に過ぎない。**Step 3** は"
+            f"挙動が異なり、キャップなし（9月）では **num_workers={s3_unc[0]}** で"
+            "早期にピークに達し、それ以上ワーカーを増やすと*低下*する — 各ワーカーが"
+            "独自のCPU（intra-op）スレッド群を起動し、総スレッド数がコア数を上回るため。"
+            f"1スレッド/ワーカーにキャップ（11月）するとその低下が消え、スループットは "
+            f"**num_workers={s3_cap[0]}** まで伸び続ける。")
+    else:
+        first_bullet = generic_first
     doc = [
         title,
         "",
         dataset_line,
         L(f"Benchmark runs: {ok} succeeded, {failed} failed or skipped. "
-          f"Raw data: `results/results.csv`, per-run logs in `logs/`.",
+          f"Raw data: {raw_src}, per-run logs in `logs/`.",
           f"ベンチマーク実行: 成功 {ok} 件、失敗/スキップ {failed} 件。"
-          f"生データ: `results/results.csv`、各実行ログは `logs/`。"),
+          f"生データ: {raw_src}、各実行ログは `logs/`。"),
         "",
         L("See also the companion report for the other machine "
           "(`REPORT_local.*` / `REPORT_aws.*`).",
@@ -1592,22 +1767,7 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
           "結論を先に述べる。裏付けとなる数値と設定ごとのスイープは各Stepの"
           "セクションを参照。"),
         "",
-        L("- **Step 1 (encoding) and Step 3 (embedding + indexing) are "
-          "CPU-bound** - the GPU sits idle, so the GPU install buys nothing. "
-          "Step 1 throughput scales with worker count up to roughly the "
-          "machine's physical core count, then flattens; Step 3 peaks at a "
-          "lower worker count and then *declines* as more workers are added, "
-          "because each worker process spawns its own pool of CPU compute "
-          "(intra-op) threads: past a low worker count the total thread count far "
-          "exceeds the machine's cores, and that CPU-thread oversubscription - not "
-          "RAM or file-descriptor pressure - is what slows every worker down.",
-          "- **Step 1（エンコード）と Step 3（埋め込み + 索引化）はCPUバウンド** "
-          "— GPUはアイドルで、GPUインストールの恩恵はない。Step 1 のスループットは"
-          "ワーカー数に応じて物理コア数付近まで向上し、その後は頭打ち。Step 3 はより"
-          "少ないワーカー数でピークに達し、それ以上増やすと*低下*する — 各ワーカー"
-          "プロセスが独自のCPU計算（intra-op）スレッド群を起動するため、少数のワーカーを"
-          "超えると総スレッド数がコア数を大きく上回り、そのCPUスレッドの過剰割り当て"
-          "（RAM やファイルディスクリプタの負荷ではなく）が全ワーカーを遅くするため。"),
+        first_bullet,
     ]
     if is_aws:
         # Data-backed capping headline: capped (HC3) vs uncapped (HB3) Step 3
@@ -1767,14 +1927,18 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
             "- Step 1 failures are **deterministic, not random**: the same 216 "
             "`mechcad` files fail with `Data extraction error: division by zero` "
             "on every full-corpus run (they succeed in Step 3's "
-            "`embed_shape_batch`). They are excluded up front, so the throughput "
-            "figures are over the 10,499 files that encode cleanly - see the "
-            "Step 2 section for the full accounting.",
+            "`embed_shape_batch`). These runs left them in the list, so the "
+            "Step 1 files/s is the 10,715 submitted files divided by the wall "
+            "time (the 216 failures finish quickly). The model itself was trained "
+            "on the 10,499 that encode cleanly - see the Step 2 section for the "
+            "full accounting.",
             "- Step 1 の失敗は**ランダムではなく決定的**: 同じ216個の `mechcad` "
             "ファイルが毎回のフルコーパス実行で `Data extraction error: division by "
             "zero` により失敗する（Step 3 の `embed_shape_batch` では成功する）。"
-            "これらは事前に除外しているため、スループットはクリーンにエンコードできる "
-            "10,499 ファイルに対する値 - 完全な内訳は Step 2 の節を参照。"))
+            "これらのrunはリストに残したまま実行したため、Step 1 の files/s は投入した "
+            "10,715 ファイルを実時間で割った値である（216件の失敗はすぐ終わる）。"
+            "モデル自体はクリーンにエンコードできる 10,499 件で学習した - "
+            "完全な内訳は Step 2 の節を参照。"))
         doc.append(L(
             "- The November re-test (the capped HC1/HC3 series) ran on a "
             "**rebuilt** g6.8xlarge with hoops_ai 1.1.1 / torch 2.9.1 pinned via "

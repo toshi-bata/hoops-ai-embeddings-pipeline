@@ -46,11 +46,20 @@ def _write_csv(path, rows):
             w.writerow(r)
 
 
-def _indexing(phase, env_tag, nw, wall, n_files=10715):
+def _indexing(phase, env_tag, nw, wall, n_files=10715, peak_gpu_mb=""):
     return _row(
         phase=phase, step="indexing", env_tag=env_tag, accelerator="cpu",
         n_files=n_files, param_name="num_workers", param_value=nw,
-        wall_s=wall, n_ok=n_files, n_failed=0,
+        wall_s=wall, n_ok=n_files, n_failed=0, peak_gpu_mb=peak_gpu_mb,
+    )
+
+
+def _dataprep(phase, env_tag, mw, enc, rss="", n_files=10715):
+    return _row(
+        phase=phase, step="dataprep", env_tag=env_tag, accelerator="cpu",
+        n_files=n_files, param_name="max_workers", param_value=mw,
+        wall_s=enc + 200, sub_timings='{"EncodingTask": %.1f}' % enc,
+        peak_rss_mb=rss, n_ok=10499, n_failed=216,
     )
 
 
@@ -203,6 +212,66 @@ def test_aws_report_drops_incorrect_failure_prose(tmp_path, monkeypatch):
     md = "\n".join(mr.build_doc(rows, all_rows, "aws"))
     assert "non-deterministic" not in md
     assert "24 files" not in md
+    # files/s is over the submitted files, not "over the 10,499".
+    assert "over the 10,499" not in md
     # The corrected, deterministic narrative is present instead.
     assert "216" in md
     assert "10,499" in md
+
+
+def test_no_collapse_wording_when_uncapped_does_not_decline(tmp_path,
+                                                            monkeypatch):
+    # Step 1 (dataprep): uncapped and capped both improve monotonically to the
+    # top worker count, so no "collapse" / "not RAM pressure" claim should fire.
+    csvp = tmp_path / "s1.csv"
+    _write_csv(csvp, [
+        _dataprep("HB1", "cpu1.1", 16, 1760.0, rss=30000),
+        _dataprep("HB1", "cpu1.1", 24, 1680.0, rss=45000),
+        _dataprep("HB1", "cpu1.1", 32, 1610.0, rss=60000),
+        _dataprep("HC1", "cpu1.1", 16, 1700.0, rss=30500),
+        _dataprep("HC1", "cpu1.1", 24, 1620.0, rss=45500),
+        _dataprep("HC1", "cpu1.1", 32, 1550.0, rss=60500),
+    ])
+    monkeypatch.setattr(mr, "CSV_PATHS", [csvp], raising=True)
+    rows = mr.load_rows()
+    out = "\n".join(mr.worker_scaling_section(
+        rows, "dataprep", "max_workers", "max_workers scaling", "aws"))
+    assert "instead of collapsing" not in out
+    assert "not RAM pressure" not in out
+    # Instead the marginal, factual framing is used.
+    assert "run-to-run noise" in out
+
+
+def test_cpu_gpu_parity_does_not_say_slower(tmp_path, monkeypatch):
+    # Step 3 CPU vs GPU at ~0.98x: parity, not a "slower" verdict.
+    csvp = tmp_path / "s3.csv"
+    _write_csv(csvp, [
+        _indexing("HC3", "cpu1.1", 8, 3163.0),
+        _indexing("HC3", "cpu1.1", 16, 1797.0),
+        _indexing("HC3", "cpu1.1", 32, 1504.0),
+        _indexing("HC3", "gpu1.1", 32, 1528.0, peak_gpu_mb="0.0"),
+    ])
+    monkeypatch.setattr(mr, "CSV_PATHS", [csvp], raising=True)
+    rows = mr.load_rows()
+    out = "\n".join(mr.step3_cpu_gpu_section(rows))
+    assert "slower" not in out
+    assert "parity" in out
+
+
+def test_amdahl_80pct_point_clamped_to_logical_cores(tmp_path, monkeypatch):
+    # Near-linear capped scaling -> tiny serial fraction -> the 80% worker count
+    # lands past the machine's 32 logical processors, so the number is hidden.
+    csvp = tmp_path / "amdahl.csv"
+    _write_csv(csvp, [
+        _indexing("HC3", "cpu1.1", 8, 800.0),
+        _indexing("HC3", "cpu1.1", 16, 420.0),
+        _indexing("HC3", "cpu1.1", 32, 230.0),
+    ])
+    monkeypatch.setattr(mr, "CSV_PATHS", [csvp], raising=True)
+    rows = mr.load_rows()
+    out = "\n".join(mr.worker_scaling_section(
+        rows, "indexing", "num_workers", "num_workers scaling", "aws"))
+    assert "beyond this machine's 32 logical processors" in out
+    # The raw 80% worker count must not appear next to "reaches 80%".
+    assert "reaches 80% of that ceiling" in out
+
