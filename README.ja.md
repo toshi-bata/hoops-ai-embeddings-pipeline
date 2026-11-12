@@ -56,7 +56,7 @@ HOOPS AI SDKとチェックポイントは、各自とTech Soft 3Dとの契約�
   - `HOOPS_AI_CKPT` -- `*/packages/trained_ml_models/`配下での`ts3d_2M_hoops_embeddings_SIGNAL-preview.ckpt`の自動探索が見つけられない場合のみ必要(例えば、このリポジトリがSDKインストールディレクトリの中にネストされていない場合――通常はそうなっているはず)。実行ごとに`--ckpt`で上書きも可能。
   - `CPU_PY` / `GPU_PY` -- 上記のWindows用PowerShellスクリプト3本でのみ必要。HOOPS AI SDKのインストールフォルダ名は標準化されていない(あるマシンでは`V1.1`、別のマシンではリネーム後の`CPU1.1`など)ため、このリポジトリ側では推測しない。実行ごとに`-CpuPy`/`-GpuPy`で上書きも可能。Linux側の`run_heavy_batch.sh`/`run_heavy_scaling.sh`も同じ`CPU_PY`/`GPU_PY`という名前を使うが、`.env`経由ではなく素のシェル環境変数として扱う(exportするか、`.env`を自分でsourceする)。
 - モニタの繋がっていないヘッドレスなLinuxボックス(EC2インスタンスなど)の場合:Xディスプレイが必要。HOOPS AIはオフスクリーン処理でもXディスプレイを要求する。`run_heavy_batch.sh`と`run_heavy_scaling.sh`は`$DISPLAY`が未設定なら`Xvfb :99`を自動起動する。`cdk/`のCDKスタックもsystemdサービスとしてこれをインストールする。
-- **Linuxで`num_workers`を大きくする場合はオープンファイル数上限の引き上げが必要。** Step 3(埋め込み+索引化)は一度に多数のファイルを開く――各ワーカーがSIGNALチェックポイント・Zarrデータセットのチャンク・プールのパイプを保持する――ため、20〜40以上のワーカーでスイープすると既定のソフト上限`ulimit -n 1024`を超え、`OSError: [Errno 24] Too many open files`で失敗することがある(親プロセスがクリーンに終了せずワーカープールでハングして見えることもある)。重量級のStep 3を実行する前に、同じシェルでソフト上限を引き上げること:
+- **Linuxで`num_workers`を大きくする場合はオープンファイル数上限の引き上げが必要。** Step 3(埋め込み+インデックス化)は一度に多数のファイルを開く――各ワーカーがSIGNALチェックポイント・Zarrデータセットのチャンク・プールのパイプを保持する――ため、20〜40以上のワーカーでスイープすると既定のソフト上限`ulimit -n 1024`を超え、`OSError: [Errno 24] Too many open files`で失敗することがある(親プロセスがクリーンに終了せずワーカープールでハングして見えることもある)。重量級のStep 3を実行する前に、同じシェルでソフト上限を引き上げること:
   ```bash
   ulimit -n 1048576   # ハード上限まで。上限は `ulimit -Hn` で確認
   ```
@@ -121,7 +121,7 @@ python bench_step3_indexing.py --env-tag gpu --num-workers 16 \
 
 ## intra-opスレッド上限(ワーカーあたり1スレッド、step 1 と step 3)
 
-Step 1(エンコード)と step 3(埋め込み+索引化)は多数の**ワーカープロセス**を起動する。何もしないと各ワーカーがコアあたり約1本のBLAS/OpenMP(intra-op)スレッドを立ち上げるため、`W`ワーカーでは`W x コア数`の計算スレッドが同時にコアを奪い合う。数ワーカーを超えるとこれがコアの過剰割り当てとなり、スループットは`num_workers`に対して頭打ちになり、やがて*低下*する。g6.8xlarge(物理16/論理32コア)での対照実験でこれを確認済み:各ワーカーをintra-op 1スレッドに抑えると低下が消え、ピークスループットが約30%向上した――[`reports/REPORT_aws.md`の「Worker-vs-thread re-test」](reports/REPORT_aws.md)参照。
+Step 1(エンコード)と step 3(埋め込み+インデックス化)は多数の**ワーカープロセス**を起動する。何もしないと各ワーカーがコアあたり約1本のBLAS/OpenMP(intra-op)スレッドを立ち上げるため、`W`ワーカーでは`W x コア数`の計算スレッドが同時にコアを奪い合う。数ワーカーを超えるとこれがコアの過剰割り当てとなり、スループットは`num_workers`に対して頭打ちになり、やがて*低下*する。g6.8xlarge(物理16/論理32コア)での対照実験を、フルの10,715ファイルコーパスで確認済み。step 3 では、上限なしのときスループットは`num_workers=12`(3,377.6 s)でピークに達し、それ以降は低下する。ワーカーあたりintra-op 1スレッドにすると`num_workers=32`まで伸び続け、1,504.2 s で終わる――ピーク比で**2.25倍**高速で、しかもピークRSSはほぼ同じ。つまり低下の原因はスレッドの過剰割り当てであり、RAMではない。step 1 はもともとスレッド軽量で、上限による各設定の時間差は約4%(実行ごとのばらつき程度)に過ぎない。[`reports/REPORT_aws.md`のstep 3の節](reports/REPORT_aws.md)参照。
 
 このため、step 1 と step 3 は**既定でintra-opスレッドをワーカーあたり1に制限**する。`--intraop-threads N`(または環境変数`HOOPS_AI_INTRAOP_THREADS`。`hoops_ai_similarity_search_server` / `hoops_ai_native_bridge`の設定と同じ名前・同じ意味)で制御する:
 
@@ -132,6 +132,8 @@ Step 1(エンコード)と step 3(埋め込み+索引化)は多数の**ワーカ
 **Step 2(学習)は意図的に制限しない。** CPU学習は1プロセスで全コアのintra-opスレッドを正当に使うべきで、制限するとCPU側だけが遅くなりCPU vs GPUの比較が成り立たなくなる。これらのスレッド変数が環境に既に設定されている場合、step 2は警告を出す。
 
 この考え方を自分のアプリに組み込む場合は、プロセス全体ではスレッド変数を設定しないこと――ホスト自身のnumpy/FAISSまで1スレッドに固定されてしまう。埋め込みワーカーを生成する呼び出しの前後だけ設定して戻すのがよい。実装例は[`hoops_ai_similarity_search_server`](https://github.com/toshi-bata/hoops_ai_similarity_search_server/blob/f7211a4/embeddings.py#L94-L148)を参照。
+
+本結果は hoops_ai 1.1.1 時点のもの。スレッドの過剰割り当ては今後のリリースで SDK 側に対処が入るかもしれず、その場合は自分で変数を設定する必要はなくなる。そうなった際はこのリポジトリを更新する。
 
 ## ベンチマーク:パイプライン全体でのCPU vs GPU
 

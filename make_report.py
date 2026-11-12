@@ -67,6 +67,20 @@ def L(en: str, ja: str) -> str:
     return ja if LANG == "ja" else en
 
 
+def fmt_pct_range(lo: float, hi: float, signed: bool = False) -> tuple[str, str]:
+    """(en, ja) label for a cap-effect percentage range, to one decimal.
+
+    When lo and hi round to the same one-decimal value, collapse to a single
+    'about X%' / '約X%' instead of a redundant 'X-X%' range.
+    """
+    spec = "+.1f" if signed else ".1f"
+    if round(lo, 1) == round(hi, 1):
+        v = format(lo, spec)
+        return (f"about {v}%", f"約{v}%")
+    a, b = format(lo, spec), format(hi, spec)
+    return (f"{a}-{b}%", f"{a}〜{b}%")
+
+
 def _read_all_csv_rows() -> list[dict]:
     """Read and concatenate every CSV in CSV_PATHS (as raw string dicts).
 
@@ -319,7 +333,8 @@ def worker_overlay_chart(param: str, capped_pts: list[tuple[int, float]],
                          uncapped_pts: list[tuple[int, float]],
                          subtitle: str, png_name: str | None = None) -> str:
     """Single-axis time-vs-worker chart overlaying the capped series (solid,
-    November) and the uncapped series (dashed, September).
+    1 intra-op thread per worker) and the uncapped series (dashed, library
+    default threads).
 
     The secondary files/s axis used by worker_scaling_chart is intentionally
     dropped here: with two time series plus two throughput series the twin axis
@@ -344,8 +359,10 @@ def worker_overlay_chart(param: str, capped_pts: list[tuple[int, float]],
     plt.rcParams["axes.unicode_minus"] = False
 
     t_lbl = L("time (s)", "時間 (s)")
-    cap_lbl = L("intra-op 1/worker (Nov 2026)", "intra-op 1/ワーカー (2026-11)")
-    unc_lbl = L("uncapped (Sep 2026)", "キャップなし (2026-09)")
+    cap_lbl = L("1 intra-op thread per worker",
+                "ワーカーあたり intra-op 1 スレッド")
+    unc_lbl = L("no cap (library default threads)",
+                "上限なし（ライブラリ既定のスレッド数）")
 
     fig, ax = plt.subplots(figsize=(7.2, 4.0))
     all_xs: set[int] = set()
@@ -688,13 +705,15 @@ def _worker_scaling_overlay(sel: list[dict], step: str, param: str, title: str,
                     for r in cgroup}
 
         out.append(L(
-            f"**{disp_tag(env_tag)}, n={n_files:,} files** - intra-op "
-            f"**1 thread/worker (Nov 2026, primary)** vs **uncapped "
-            f"(Sep 2026)**. `ratio = uncapped / capped time` (> 1 means capping "
+            f"**{disp_tag(env_tag)}, n={n_files:,} files** - "
+            f"**1 intra-op thread per worker (the capped re-run, primary)** vs "
+            f"**no cap (the first runs, library default threads)**. "
+            f"`ratio = uncapped / capped time` (> 1 means capping "
             f"is faster).\n",
-            f"**{disp_tag(env_tag)}、n={n_files:,} ファイル** - intra-op "
-            f"**1スレッド/ワーカー（2026-11、主系列）** vs **キャップなし"
-            f"（2026-09）**。`比 = キャップなし時間 / キャップあり時間`"
+            f"**{disp_tag(env_tag)}、n={n_files:,} ファイル** - "
+            f"**ワーカーあたり intra-op 1 スレッド（上限ありの再計測、主系列）** vs "
+            f"**上限なし（最初の計測、ライブラリ既定のスレッド数）**。"
+            f"`比 = キャップなし時間 / キャップあり時間`"
             f"（1より大きいほどキャップが速い）。\n"))
 
         all_n = sorted(set(cap_t) | set(unc_t))
@@ -721,7 +740,13 @@ def _worker_scaling_overlay(sel: list[dict], step: str, param: str, title: str,
              L("capped peak RSS (MB)", "キャップあり 最大RSS (MB)"),
              L("failed", "失敗")], table, highlight_first=peak_n))
 
-        chart_title = f"{disp_tag(env_tag)} - {title} (n={n_files:,})"
+        step_label = L(
+            "Step 1 encode" if step == "dataprep" else "Step 3 embed + index",
+            "Step 1 エンコード" if step == "dataprep"
+            else "Step 3 埋め込み + インデックス化")
+        chart_title = L(
+            f"{step_label}: {param} scaling (CPU, n={n_files:,})",
+            f"{step_label}: {param} スケーリング (CPU, n={n_files:,})")
         out.append(worker_overlay_chart(param, capped_pts, uncapped_pts,
                                         chart_title, png_name))
 
@@ -816,15 +841,16 @@ def _worker_scaling_overlay(sel: list[dict], step: str, param: str, title: str,
                      if unc_t.get(n) and cap_t.get(n)]
             if diffs:
                 lo, hi = min(diffs), max(diffs)
+                rng_en, rng_ja = fmt_pct_range(lo, hi, signed=True)
                 out.append(L(
                     f"\n_Uncapped and capped both peak at {param}={cbn2}"
                     + (f" (uncapped {param}={ubn2})" if ubn2 != cbn2 else "")
                     + f"; capping shifts the per-setting times by only "
-                    f"{lo:+.1f}..{hi:+.1f}% (positive = capped faster) - "
+                    f"{rng_en} (positive = capped faster) - "
                     f"run-to-run noise, not a real gain here._\n",
                     f"\n_キャップなし・ありともピークは {param}={cbn2}"
                     + (f"（キャップなしは {param}={ubn2}）" if ubn2 != cbn2 else "")
-                    + f"。キャップによる各設定の時間差は {lo:+.1f}〜{hi:+.1f}%"
+                    + f"。キャップによる各設定の時間差は {rng_ja}"
                     f"（正=キャップありが速い）に過ぎず、実質的な改善ではなく"
                     f"実行ごとのばらつきの範囲。_\n"))
 
@@ -986,11 +1012,11 @@ def training_section(rows: list[dict]) -> list[str]:
             out.append(L(
                 f"**Submitted vs trained.** The {n_full:,} files are the "
                 f"*submitted* count. Step 1 encoding fails on a **deterministic "
-                f"set of {n_fail} files**: every November full-corpus run "
-                f"(max_workers 16/24/32 and the GPU-venv run at 32) failed on "
-                f"exactly the same {n_fail} files, the two 100-file warm-ups "
-                f"failed on the same 2, and the September runs reported the same "
-                f"{n_fail}. Every failure is the same error "
+                f"set of {n_fail} files**: every full-corpus run of the capped "
+                f"re-run (max_workers 16/24/32 and the GPU-venv run at 32) "
+                f"failed on exactly the same {n_fail} files, the two 100-file "
+                f"warm-ups failed on the same 2, and the first runs reported the "
+                f"same {n_fail}. Every failure is the same error "
                 f"(`Data extraction error: division by zero`). The identical "
                 f"files embed without error in Step 3 (`embed_shape_batch` had 0 "
                 f"failures in every run), so the fault is specific to Step 1's "
@@ -1002,9 +1028,10 @@ def training_section(rows: list[dict]) -> list[str]:
                 f"the list as HEAVY/FAILED by an earlier registration pass.)\n",
                 f"**投入数 vs 学習数。** {n_full:,}ファイルは*投入*数。Step 1 の"
                 f"エンコードは**決定的な {n_fail} ファイルの集合**で失敗する: "
-                f"11月のフルコーパス各run（max_workers 16/24/32 と GPU用venvの32）は"
-                f"まったく同じ {n_fail} ファイルで失敗し、100ファイルのウォームアップ"
-                f"2本も同じ2ファイルで失敗、9月のrunも同じ {n_fail} 件だった。"
+                f"上限ありの再計測のフルコーパス各run（max_workers 16/24/32 と "
+                f"GPU用venvの32）はまったく同じ {n_fail} ファイルで失敗し、"
+                f"100ファイルのウォームアップ2本も同じ2ファイルで失敗、"
+                f"最初の計測のrunも同じ {n_fail} 件だった。"
                 f"失敗はすべて同一のエラー（`Data extraction error: division by "
                 f"zero`）。同じファイルは Step 3（`embed_shape_batch`）では"
                 f"エラーなく埋め込まれ（全runで失敗0）、問題は Step 1 の抽出に"
@@ -1197,28 +1224,25 @@ def step3_cpu_gpu_section(rows: list[dict]) -> list[str]:
     gpu_pn = min(gpu, key=lambda n: gpu[n])
     cpu_pt, gpu_pt = cpu[cpu_pn], gpu[gpu_pn]
 
-    # Engineering-team-confirmed explanation for the 0 MB peak GPU memory in
-    # Step 3 (migrated from the hand-edited report, commit 0439f9c): this build
-    # hardcodes Step 3 embedding to the CPU; it has since been changed to use
-    # the install's device, but no strong end-to-end speedup is expected.
+    # Explanation for the 0 MB peak GPU memory in Step 3 (migrated from the
+    # hand-edited report, commit 0439f9c): this build hardcodes Step 3 embedding
+    # to the CPU. A future release may move the forward pass to the device, but
+    # the end-to-end gain is bounded by the CPU-side read + encode.
     note_en = (
         ("Peak GPU memory was 0 MB in every indexing run because " if gpu_zero
          else "")
-        + "this HOOPS AI build hardcodes Step 3 embedding to the CPU. The "
-        "engineering team confirmed this and has since changed it to use the "
-        "install's device, but does not expect a strong speedup: Step 3 is "
-        "bound by reading the CAD file, encoding it, and then inference, and the "
-        "GPU can only accelerate the inference sub-step - whether a real "
-        "end-to-end speedup materializes is unverified and needs a re-test on "
-        "the updated build.\n")
+        + "this HOOPS AI build hardcodes Step 3 embedding to the CPU. A future "
+        "release may run that inference on the GPU, but don't expect a jump like "
+        "training's: each file still has to be read and encoded on the CPU "
+        "before the forward pass, and only the forward pass would move to the "
+        "device.\n")
     note_ja = (
-        ("索引化の全実行で最大GPUメモリが0 MBだったのは、" if gpu_zero else "")
+        ("インデックス化の全実行で最大GPUメモリが0 MBだったのは、" if gpu_zero else "")
         + "本HOOPS AIビルドが Step 3 の埋め込みをCPUに固定（ハードコード）している"
-        "ため。エンジニアリングチームはこれを認め、以降はインストール先のデバイス"
-        "（GPU）を使うよう変更済みだが、大きな高速化は期待しないとのこと: Step 3 は"
-        "「CADファイル読み込み → エンコード → 推論」に律速され、GPUが短縮できるのは"
-        "推論部分のみのため、実際にエンドツーエンドで速くなるかは未検証で、"
-        "更新版ビルドでの再測定が必要。\n")
+        "ため。今後のリリースでは、この推論がGPUで実行されるようになるかもしれない。"
+        "ただし、学習のような大きな差は期待しないほうがよい。各ファイルは順伝播の前に、"
+        "やはりCPUで読み込みとエンコードをする必要があり、GPUに移るのは順伝播の部分"
+        "だけだからだ。\n")
 
     out = [f"### {L('CPU vs GPU', 'CPU vs GPU')}\n"]
     ratio = cpu_pt / gpu_pt
@@ -1234,7 +1258,7 @@ def step3_cpu_gpu_section(rows: list[dict]) -> list[str]:
         f"{gpu_pt:.1f} s (num_workers={gpu_pn}): the GPU install is "
         f"**{ratio:.2f}x** the CPU throughput" + tail_en
         + note_en,
-        f"**Step 3 の索引化もCPUバウンドで、GPUの恩恵はない。** 各プラットフォームの"
+        f"**Step 3 のインデックス化もCPUバウンドで、GPUの恩恵はない。** 各プラットフォームの"
         f"ピークで、CPU {cpu_pt:.1f} s (num_workers={cpu_pn}) vs GPU "
         f"{gpu_pt:.1f} s (num_workers={gpu_pn}): GPUインストールはCPUの "
         f"**{ratio:.2f}倍** のスループット" + tail_ja
@@ -1269,8 +1293,8 @@ def step3_cpu_gpu_section(rows: list[dict]) -> list[str]:
 
 
 def subset_rethread_section() -> list[str]:
-    """September 500-file subset experiment that first identified intra-op
-    thread oversubscription and motivated the full-corpus November re-test above
+    """Earlier 500-file subset experiment that first identified intra-op
+    thread oversubscription and motivated the full-corpus re-run above
     (migrated, reframed, from the hand-edited report commit 807f8ef). The Q2T
     source rows are not in the curated CSVs, so the numbers here are static.
     """
@@ -1295,11 +1319,11 @@ def subset_rethread_section() -> list[str]:
              + "\n".join(body) + "\n</tbody></table>")
 
     out = [L(
-        "### Where this was first seen - the September 500-file subset experiment",
-        "### 最初に確認した場所 - 9月の500ファイル部分集合での実験"), ""]
+        "### Where this was first seen - an earlier 500-file subset experiment",
+        "### 最初に確認した場所 - 500ファイル部分集合での先行実験"), ""]
     out.append(L(
-        "The full-corpus re-test above was motivated by an earlier controlled "
-        "experiment on a clean **500-file `mechcad` subset** (September, same "
+        "The full-corpus re-run above was motivated by an earlier controlled "
+        "experiment on a clean **500-file `mechcad` subset** (same "
         "g6.8xlarge: 16 physical / 32 logical cores, 121 GB; balanced "
         "50/category, restricted to files that had already encoded cleanly, so "
         "every run has 0 failures and the curves are pure worker scaling). "
@@ -1308,7 +1332,7 @@ def subset_rethread_section() -> list[str]:
         "and inherited by the spawned workers) first revealed the "
         "oversubscription and removed the high-worker decline:",
         "上記のフルコーパス再測定は、それ以前のクリーンな**500ファイルの `mechcad` "
-        "部分集合**での対照実験（9月、同一の g6.8xlarge: 物理16 / 論理32コア、"
+        "部分集合**での対照実験（同一の g6.8xlarge: 物理16 / 論理32コア、"
         "121 GB。カテゴリ均等50件、エンコード成功済みのファイルに限定＝失敗0で、"
         "曲線は純粋なワーカースケーリング）が動機になった。ワーカーごとの intra-op "
         "スレッド上限（`OMP/MKL/OPENBLAS/NUMEXPR/VECLIB_NUM_THREADS`、torch import "
@@ -1675,10 +1699,10 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
             f"README \"Benchmark dataset\" section for the citation and download.",
             "マシン: **AWS g6.8xlarge**（AMD EPYC 16コア + NVIDIA L4）。"
             f"データセット: **TMCAD v2**（Truly Mechanical CAD Dataset; Zou & Zhu, "
-            f"2025）。HOOPS AI チュートリアルが埋め込み索引化に使用するヘビー機械CAD"
+            f"2025）。HOOPS AI チュートリアルが埋め込みインデックス化に使用するヘビー機械CAD"
             f"コーパスで、ここではローカルのフォルダ名 `mechcad` として現れる。"
             f"Step 1 のワーカースイープ、Step 2 の CPU vs GPU 学習、そして Step 3 の"
-            f"埋め込み + FAISS索引化（チュートリアルの事前学習モデル "
+            f"埋め込み + FAISSインデックス化（チュートリアルの事前学習モデル "
             f"`ts3d_2M_hoops_embeddings_SIGNAL-preview.ckpt` を使用）のすべてで、"
             f"同じ{n_disp}ファイルの全コーパスを使用。引用とダウンロードは README の"
             f"「Benchmark dataset」節を参照。")
@@ -1709,7 +1733,7 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
         "(intra-op) threads: past a low worker count the total thread count far "
         "exceeds the machine's cores, and that CPU-thread oversubscription - not "
         "RAM or file-descriptor pressure - is what slows every worker down.",
-        "- **Step 1（エンコード）と Step 3（埋め込み + 索引化）はCPUバウンド** "
+        "- **Step 1（エンコード）と Step 3（埋め込み + インデックス化）はCPUバウンド** "
         "— GPUはアイドルで、GPUインストールの恩恵はない。Step 1 のスループットは"
         "ワーカー数に応じて物理コア数付近まで向上し、その後は頭打ち。Step 3 はより"
         "少ないワーカー数でピークに達し、それ以上増やすと*低下*する — 各ワーカー"
@@ -1719,6 +1743,7 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
     if is_aws and s1_cap and s1_unc and s3_cap and s3_unc and s1_eff \
             and s1_parity and s3_parity:
         lo, hi = s1_eff
+        eff_en, eff_ja = fmt_pct_range(lo, hi)
         first_bullet = L(
             "- **Step 1 (encoding) and Step 3 (embedding + indexing) are "
             "CPU-bound** - the GPU install is no faster (both steps run at "
@@ -1726,24 +1751,24 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
             "within run-to-run noise). **Step 1** scales with worker count up "
             f"to **max_workers={s1_cap[0]}** (the machine's logical-processor "
             "count) with or without the thread cap - capping changes per-setting "
-            f"times by only {lo:.0f}-{hi:.0f}% (run-to-run noise). **Step 3** "
-            "behaves differently: uncapped (Sep) it peaks early at "
+            f"times by only {eff_en} (run-to-run noise). **Step 3** "
+            "behaves differently: with no cap it peaks early at "
             f"**num_workers={s3_unc[0]}** and then *declines* as more workers "
             "are added, because each worker spawns its own pool of CPU "
             "(intra-op) threads and the total thread count outruns the cores; "
-            f"capping to 1 thread/worker (Nov) removes that decline and "
+            f"capping to 1 intra-op thread per worker removes that decline and "
             f"throughput keeps rising to **num_workers={s3_cap[0]}**.",
-            "- **Step 1（エンコード）と Step 3（埋め込み + 索引化）はCPUバウンド** "
+            "- **Step 1（エンコード）と Step 3（埋め込み + インデックス化）はCPUバウンド** "
             "— GPUインストールでも速くならない（両ステップとも同じワーカー数で "
             f"約{s1_parity:.2f}x ＝ 実行ごとのノイズの範囲でほぼ同等）。**Step 1** は"
             f"キャップの有無にかかわらず **max_workers={s1_cap[0]}**（本マシンの論理"
             "プロセッサ数）まで伸びる — キャップによる各設定の時間差は "
-            f"{lo:.0f}〜{hi:.0f}%（実行ごとのばらつき程度）に過ぎない。**Step 3** は"
-            f"挙動が異なり、キャップなし（9月）では **num_workers={s3_unc[0]}** で"
+            f"{eff_ja}（実行ごとのばらつき程度）に過ぎない。**Step 3** は"
+            f"挙動が異なり、上限なしでは **num_workers={s3_unc[0]}** で"
             "早期にピークに達し、それ以上ワーカーを増やすと*低下*する — 各ワーカーが"
             "独自のCPU（intra-op）スレッド群を起動し、総スレッド数がコア数を上回るため。"
-            f"1スレッド/ワーカーにキャップ（11月）するとその低下が消え、スループットは "
-            f"**num_workers={s3_cap[0]}** まで伸び続ける。")
+            f"ワーカーあたり intra-op 1 スレッドにキャップするとその低下が消え、"
+            f"スループットは **num_workers={s3_cap[0]}** まで伸び続ける。")
     else:
         first_bullet = generic_first
     doc = [
@@ -1796,7 +1821,7 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
               f"(num_workers={unc_pn}) - a **{unc_pt / cap_pt:.2f}x** faster "
               "peak at essentially the same peak RSS, confirming the slowdown "
               "was CPU-thread oversubscription, not RAM. See the Step 3 section "
-              "and the September 500-file subset experiment that first found it.",
+              "and the earlier 500-file subset experiment that first found it.",
               "- **intra-op スレッドを1ワーカーあたり1本に制限することが Step 1 / "
               "Step 3 の既定になった**（`--intraop-threads` / "
               "`HOOPS_AI_INTRAOP_THREADS`、`0` で無効）。フルの"
@@ -1806,7 +1831,15 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
               f"（num_workers={unc_pn}）に対し **{unc_pt / cap_pt:.2f}倍** 速い"
               "ピーク。ピークRSSはほぼ同一で、遅延の原因が RAM ではなく CPU スレッドの"
               "過剰割り当てだったことを裏付ける。Step 3 の節と、最初にこれを発見した"
-              "9月の500ファイル部分集合の実験を参照。"))
+              "500ファイル部分集合での先行実験を参照。"))
+        doc.append(L(
+            "- These results are as of hoops_ai 1.1.1. The thread "
+            "oversubscription may be handled on the SDK side in a future "
+            "release, which would make setting the variables yourself "
+            "unnecessary; this repository will be updated if that happens.",
+            "- 本結果は hoops_ai 1.1.1 時点のもの。スレッドの過剰割り当ては今後の"
+            "リリースで SDK 側に対処が入るかもしれず、その場合は自分で変数を設定する"
+            "必要はなくなる。そうなった際はこのリポジトリを更新する。"))
     if has_training:
         doc.append(L(
           "- **Step 2 (training) is the only GPU-bound stage** and the only "
@@ -1852,7 +1885,7 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
     if has_training:
         doc += [L("## Step 2 - training", "## Step 2 - 学習"), ""]
         doc += training_section(rows)
-    doc += [L("## Step 3 - embedding + FAISS indexing", "## Step 3 - 埋め込み + FAISS索引化"), ""]
+    doc += [L("## Step 3 - embedding + FAISS indexing", "## Step 3 - 埋め込み + FAISSインデックス化"), ""]
     doc += worker_scaling_section(rows, "indexing", "num_workers",
                                   L("num_workers scaling", "num_workers スケーリング"),
                                   scope, png_name="step3_workers")
@@ -1889,7 +1922,7 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
                     "",
                     L("Turn this off for throughput benchmarking and for production "
                       "index builds where thumbnails are not needed.",
-                      "スループット計測や、サムネイル不要の本番索引構築では無効化する。"), ""]
+                      "スループット計測や、サムネイル不要の本番インデックス構築では無効化する。"), ""]
 
     # failures
     bad = [r for r in all_rows if r.get("status") != "OK"]
@@ -1940,20 +1973,20 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
             "モデル自体はクリーンにエンコードできる 10,499 件で学習した - "
             "完全な内訳は Step 2 の節を参照。"))
         doc.append(L(
-            "- The November re-test (the capped HC1/HC3 series) ran on a "
+            "- The capped re-run (the HC1/HC3 series) ran on a "
             "**rebuilt** g6.8xlarge with hoops_ai 1.1.1 / torch 2.9.1 pinned via "
-            "CDK; the NVIDIA driver moved 580.173 (Sep) -> 580.178.04 (Nov), "
-            "which cannot matter because Steps 1 and 3 never touch the GPU. The "
-            "November sweeps also ran after a full-corpus page-cache preload and "
-            "a 100-file warm-up; the September uncapped sweeps had neither, so "
-            "the September 1st-point-per-sweep numbers carry a small cold-cache "
-            "penalty.",
-            "- 11月の再測定（キャップありの HC1/HC3 系列）は、hoops_ai 1.1.1 / torch "
+            "CDK; the NVIDIA driver moved 580.173 -> 580.178.04 between the first "
+            "runs and the re-run, which cannot matter because Steps 1 and 3 "
+            "never touch the GPU. The re-run also ran after a full-corpus "
+            "page-cache preload and a 100-file warm-up; the first uncapped "
+            "sweeps had neither, so the first sweeps' 1st-point-per-sweep "
+            "numbers carry a small cold-cache penalty.",
+            "- 上限ありの再計測（HC1/HC3 系列）は、hoops_ai 1.1.1 / torch "
             "2.9.1 を CDK で固定して**作り直した** g6.8xlarge で実行した。NVIDIA "
-            "ドライバは 580.173（9月）→ 580.178.04（11月）に変わったが、Step 1 / "
-            "Step 3 は GPU を使わないため影響し得ない。11月のスイープはコーパスの"
+            "ドライバは最初の計測から再計測の間に 580.173 → 580.178.04 に変わったが、"
+            "Step 1 / Step 3 は GPU を使わないため影響し得ない。再計測はコーパスの"
             "ページキャッシュ事前読み込みと100ファイルのウォームアップの後に実行した"
-            "が、9月のキャップなしスイープにはどちらも無かったため、9月の各スイープの"
+            "が、最初のキャップなしスイープにはどちらも無かったため、最初のスイープの"
             "1点目にはわずかなコールドキャッシュのペナルティが乗っている。"))
     doc += [L("- Background load on the machine (including antivirus scanning "
               "the STEP files) affects the CPU-bound stages more than the "

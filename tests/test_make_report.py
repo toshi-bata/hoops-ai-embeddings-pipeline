@@ -14,6 +14,7 @@ matplotlib is monkeypatched out so the tests run in a chart-less environment.
 """
 import csv
 import importlib
+import re
 
 import pytest
 
@@ -274,4 +275,65 @@ def test_amdahl_80pct_point_clamped_to_logical_cores(tmp_path, monkeypatch):
     assert "beyond this machine's 32 logical processors" in out
     # The raw 80% worker count must not appear next to "reaches 80%".
     assert "reaches 80% of that ceiling" in out
+
+
+MONTH_LABELS = ["Sep 2026", "Nov 2026", "September", "November",
+                "2026-09", "2026-11", "9月", "11月", "(Sep)", "(Nov)"]
+
+
+@pytest.mark.parametrize("lang", ["en", "ja"])
+def test_report_has_no_month_labels(tmp_path, monkeypatch, lang):
+    monkeypatch.setattr(mr, "LANG", lang, raising=True)
+    csvp = tmp_path / "aws.csv"
+    _write_csv(csvp, _full_aws_rows())
+    monkeypatch.setattr(mr, "CSV_PATHS", [csvp], raising=True)
+    rows = mr.load_rows()
+    all_rows = mr.load_all_rows()
+    md = "\n".join(mr.build_doc(rows, all_rows, "aws"))
+    for label in MONTH_LABELS:
+        assert label not in md, f"{label!r} leaked into the {lang} report"
+
+
+def test_report_drops_engineering_team_wording(tmp_path, monkeypatch):
+    csvp = tmp_path / "aws.csv"
+    _write_csv(csvp, _full_aws_rows())
+    monkeypatch.setattr(mr, "CSV_PATHS", [csvp], raising=True)
+    rows = mr.load_rows()
+    all_rows = mr.load_all_rows()
+    md = "\n".join(mr.build_doc(rows, all_rows, "aws"))
+    assert "has since changed" not in md
+    # The replacement forward-pass framing is present instead.
+    assert "forward pass" in md
+
+
+def test_cap_effect_range_never_repeats_the_same_number(tmp_path, monkeypatch):
+    csvp = tmp_path / "aws.csv"
+    _write_csv(csvp, _full_aws_rows())
+    monkeypatch.setattr(mr, "CSV_PATHS", [csvp], raising=True)
+    rows = mr.load_rows()
+    all_rows = mr.load_all_rows()
+    md = "\n".join(mr.build_doc(rows, all_rows, "aws"))
+    # No "4-4%" / "4.2-4.2%" style redundant range; equal bounds collapse.
+    assert re.search(r"(\d+(?:\.\d+)?)-\1%", md) is None
+
+
+def test_fmt_pct_range_collapses_equal_bounds():
+    assert mr.fmt_pct_range(4.2, 4.24) == ("about 4.2%", "約4.2%")
+    assert mr.fmt_pct_range(4.1, 4.4) == ("4.1-4.4%", "4.1〜4.4%")
+    assert mr.fmt_pct_range(4.2, 4.2, signed=True) == ("about +4.2%", "約+4.2%")
+    assert mr.fmt_pct_range(4.1, 4.4, signed=True) == ("+4.1-+4.4%",
+                                                       "+4.1〜+4.4%")
+
+
+def test_ja_report_uses_index_term_consistently(tmp_path, monkeypatch):
+    monkeypatch.setattr(mr, "LANG", "ja", raising=True)
+    csvp = tmp_path / "aws.csv"
+    _write_csv(csvp, _full_aws_rows())
+    monkeypatch.setattr(mr, "CSV_PATHS", [csvp], raising=True)
+    rows = mr.load_rows()
+    all_rows = mr.load_all_rows()
+    md = "\n".join(mr.build_doc(rows, all_rows, "aws"))
+    assert "索引" not in md
+    assert "インデックス" in md
+
 

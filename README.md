@@ -251,10 +251,15 @@ processes**. Left alone, each worker starts roughly one BLAS/OpenMP
 (intra-op) thread per core, so with `W` workers the machine is asked to run
 `W x cores` compute threads at once. Past a handful of workers that
 oversubscribes the cores, and throughput stops rising with `num_workers` and
-then *falls*. A controlled re-test on the g6.8xlarge (16 physical / 32
-logical cores) confirmed this: capping each worker to a single intra-op
-thread removed the decline and raised peak throughput by ~30% -- see the
-["Worker-vs-thread re-test" in `reports/REPORT_aws.md`](reports/REPORT_aws.md).
+then *falls*. A controlled re-run on the g6.8xlarge (16 physical / 32
+logical cores) confirmed this on the full 10,715-file corpus. For step 3,
+with no cap throughput peaks at `num_workers=12` (3,377.6 s) and falls off
+beyond that; with one intra-op thread per worker it keeps rising to
+`num_workers=32` and finishes in 1,504.2 s -- a **2.25x** faster peak, at
+essentially the same peak RSS, so the slowdown is thread oversubscription,
+not RAM. Step 1 is already thread-light: capping shifts its times by only
+about 4% (run-to-run noise). See the
+[step 3 section of `reports/REPORT_aws.md`](reports/REPORT_aws.md).
 
 Because of that, steps 1 and 3 **cap intra-op threads at 1 per worker by
 default**. Control it with `--intraop-threads N` (or the
@@ -278,6 +283,11 @@ whole process -- that would also pin your host's own numpy/FAISS to one
 thread. Set them only around the call that spawns the embedding workers and
 restore them afterwards; see a reference implementation in
 [`hoops_ai_similarity_search_server`](https://github.com/toshi-bata/hoops_ai_similarity_search_server/blob/f7211a4/embeddings.py#L94-L148).
+
+These results are as of hoops_ai 1.1.1. The thread oversubscription may be
+handled on the SDK side in a future release, which would make setting the
+variables yourself unnecessary; this repository will be updated if that
+happens.
 
 ## Benchmarking: CPU vs GPU across the pipeline
 
