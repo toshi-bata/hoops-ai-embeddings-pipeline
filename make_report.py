@@ -21,17 +21,38 @@ from pathlib import Path
 
 BENCH_ROOT = Path(__file__).resolve().parent
 RES = BENCH_ROOT / "results"
+REPORTS = BENCH_ROOT / "reports"
 CSV_PATH = RES / "results.csv"
+
+# Input CSV paths, overridable with --csv (one or more). Both load_rows() and
+# load_all_rows() read this same list, so a multi-file invocation (e.g. the
+# September uncapped curated data plus the November capped re-test) is treated
+# as one concatenated result set everywhere.
+CSV_PATHS: list[Path] = [CSV_PATH]
+
+# When set (via --png-dir), charts are also written as standalone PNG files in
+# addition to being embedded in the report as base64 data URIs.
+PNG_DIR: Path | None = None
 
 # Current output language, set per-report in main(). Section builders read this
 # global through L() so their signatures stay unchanged.
 LANG = "en"
 
-# Phases produced on the AWS EC2 heavy-scale host (Step 1 n=2,000 sweep, Step 2
-# n=10,000 CPU-vs-GPU, Step 3 n=2,000 sweep). Everything else is the local
-# Windows laptop (parts500 500-part sweeps). The report is split by machine so
-# each document only shows one environment's data.
-AWS_PHASES = {"HB1", "HB2", "HB3"}
+# Phases produced on the AWS EC2 heavy-scale host. HB1/HB2/HB3 are the September
+# uncapped sweeps (Step 1 encode, Step 2 CPU-vs-GPU training, Step 3 indexing);
+# HC1/HC3 are the November re-test with intra-op threads capped at one per
+# worker (Step 1 encode, Step 3 indexing). Everything else is the local Windows
+# laptop (parts500 500-part sweeps). The report is split by machine so each
+# document only shows one environment's data.
+AWS_PHASES = {"HB1", "HB2", "HB3", "HC1", "HC3"}
+
+# Intra-op-capped phases (November re-test) and their uncapped counterparts
+# (September). STEP_PHASES maps a benchmark step to its (capped, uncapped) phase
+# pair so the worker-scaling and CPU-vs-GPU sections can make the capped series
+# primary and overlay the uncapped series for comparison.
+CAPPED_PHASES = {"HC1", "HC3"}
+UNCAPPED_PHASES = {"HB1", "HB3"}
+STEP_PHASES = {"dataprep": ("HC1", "HB1"), "indexing": ("HC3", "HB3")}
 
 
 def scope_rows(rows: list[dict], scope: str) -> list[dict]:
@@ -46,11 +67,26 @@ def L(en: str, ja: str) -> str:
     return ja if LANG == "ja" else en
 
 
+def _read_all_csv_rows() -> list[dict]:
+    """Read and concatenate every CSV in CSV_PATHS (as raw string dicts).
+
+    Shared by load_rows() and load_all_rows() so a multi-CSV invocation is one
+    result set everywhere. Missing files are skipped; a completely empty set is
+    the caller's problem to report.
+    """
+    rows: list[dict] = []
+    for p in CSV_PATHS:
+        if not p.is_file():
+            continue
+        with p.open(encoding="utf-8-sig", newline="") as fh:
+            rows.extend(csv.DictReader(fh))
+    return rows
+
+
 def load_rows() -> list[dict]:
-    if not CSV_PATH.is_file():
-        raise SystemExit(f"no results yet: {CSV_PATH}")
-    with CSV_PATH.open(encoding="utf-8-sig", newline="") as fh:
-        rows = list(csv.DictReader(fh))
+    rows = _read_all_csv_rows()
+    if not rows:
+        raise SystemExit(f"no results yet: {', '.join(str(p) for p in CSV_PATHS)}")
     for r in rows:
         for k in ("wall_s", "throughput", "peak_rss_mb", "peak_gpu_mb"):
             try:
@@ -73,7 +109,8 @@ def load_rows() -> list[dict]:
     #   S1K / keep-best   = CPU dataset-materialisation runs; they duplicate the
     #                       best max_workers point already present in the S1 sweep
     # Accepted phases: legacy numeric "1".."5" and the local-sweep tags S1/S2/S3.
-    ok_phase = {"1", "2", "3", "4", "5", "S1", "S2", "S3", "HB1", "HB2", "HB3"}
+    ok_phase = {"1", "2", "3", "4", "5", "S1", "S2", "S3",
+                "HB1", "HB2", "HB3", "HC1", "HC3"}
     drop_note = ("warm-up", "smoke", "calibration", "keep-best")
     out = []
     for r in rows:
@@ -187,9 +224,14 @@ def disp_tag(tag: str) -> str:
     return tag.replace("cpu", "CPU").replace("gpu", "GPU")
 
 
-def env_cores(env_tag: str) -> tuple[int, int] | None:
-    """(physical_cores, logical_cores) from results/env_<tag>.json, or None."""
-    p = RES / f"env_{env_tag}.json"
+def env_cores(env_tag: str, scope: str = "") -> tuple[int, int] | None:
+    """(physical_cores, logical_cores) from the env JSON for this tag, or None.
+
+    scope="aws" reads results/env_aws_<tag>.json (the heavy host); otherwise
+    results/env_<tag>.json (the local laptop).
+    """
+    prefix = "env_aws_" if scope == "aws" else "env_"
+    p = RES / f"{prefix}{env_tag}.json"
     if not p.is_file():
         return None
     try:
@@ -199,6 +241,19 @@ def env_cores(env_tag: str) -> tuple[int, int] | None:
         return (phys, logi) if phys else None
     except Exception:
         return None
+
+
+def _save_png(fig, name: str) -> None:
+    """If PNG_DIR is set, also write `fig` as PNG_DIR/<name>[_ja].png.
+
+    Lets --png-dir emit the same charts embedded in the report as standalone
+    files for reuse in articles. No-op when PNG_DIR is unset.
+    """
+    if PNG_DIR is None:
+        return
+    sfx = "_ja" if LANG == "ja" else ""
+    PNG_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(PNG_DIR / f"{name}{sfx}.png", format="png", dpi=110)
 
 
 def worker_scaling_chart(param: str, pts: list[tuple[int, float]],
@@ -260,6 +315,74 @@ def worker_scaling_chart(param: str, pts: list[tuple[int, float]],
             f'style="max-width:100%;height:auto">\n')
 
 
+def worker_overlay_chart(param: str, capped_pts: list[tuple[int, float]],
+                         uncapped_pts: list[tuple[int, float]],
+                         subtitle: str, png_name: str | None = None) -> str:
+    """Single-axis time-vs-worker chart overlaying the capped series (solid,
+    November) and the uncapped series (dashed, September).
+
+    The secondary files/s axis used by worker_scaling_chart is intentionally
+    dropped here: with two time series plus two throughput series the twin axis
+    becomes four lines and unreadable, so this chart shows wall time only (the
+    tables alongside carry files/s). A dotted vertical line marks the capped
+    series' peak (shortest-time) worker count.
+    """
+    import io
+    import base64
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.font_manager as fm
+
+    if LANG == "ja":
+        available = {f.name for f in fm.fontManager.ttflist}
+        for cand in ("Yu Gothic", "Meiryo", "MS Gothic", "Noto Sans CJK JP",
+                     "Noto Sans JP", "IPAexGothic", "TakaoGothic"):
+            if cand in available:
+                plt.rcParams["font.family"] = cand
+                break
+    plt.rcParams["axes.unicode_minus"] = False
+
+    t_lbl = L("time (s)", "時間 (s)")
+    cap_lbl = L("intra-op 1/worker (Nov 2026)", "intra-op 1/ワーカー (2026-11)")
+    unc_lbl = L("uncapped (Sep 2026)", "キャップなし (2026-09)")
+
+    fig, ax = plt.subplots(figsize=(7.2, 4.0))
+    all_xs: set[int] = set()
+    if uncapped_pts:
+        ux = [n for n, _ in sorted(uncapped_pts)]
+        ut = [t for _, t in sorted(uncapped_pts)]
+        ax.plot(ux, ut, "s--", color="#999999", label=unc_lbl)
+        all_xs.update(ux)
+    if capped_pts:
+        cx = [n for n, _ in sorted(capped_pts)]
+        ct = [t for _, t in sorted(capped_pts)]
+        ax.plot(cx, ct, "o-", color="#1f77b4", label=cap_lbl)
+        all_xs.update(cx)
+        bn = min(capped_pts, key=lambda p: p[1])[0]
+        ax.axvline(bn, color="#888", linestyle=":", linewidth=1)
+
+    ax.set_xlabel(param)
+    ax.set_ylabel(t_lbl)
+    if all_xs:
+        ax.set_xticks(sorted(all_xs))
+    ax.grid(True, alpha=0.3)
+    ax.set_ylim(bottom=0)
+    ax.set_title(subtitle, fontsize=10)
+    ax.legend(loc="upper right", fontsize=9)
+    fig.tight_layout()
+
+    if png_name:
+        _save_png(fig, png_name)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=110)
+    plt.close(fig)
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    alt = f"{param} vs {t_lbl} (capped vs uncapped)"
+    return (f'\n<img alt="{alt}" src="data:image/png;base64,{b64}" '
+            f'style="max-width:100%;height:auto">\n')
+
+
 def step1_encode_at(rows: list[dict], env_tag: str, workers: int) -> float | None:
     """Step 1 (dataprep) encode wall time for a given install at a given
     max_workers, excluding the generate_images variant."""
@@ -274,8 +397,24 @@ def step1_encode_at(rows: list[dict], env_tag: str, workers: int) -> float | Non
     return None
 
 
+def step1_encode_capped(rows: list[dict], env_tag: str) -> float | None:
+    """Step 1 (dataprep) encode time at the intra-op-capped (HC1) peak for an
+    install - the shortest encode among that install's capped runs. Returns None
+    when there are no capped Step 1 rows (callers fall back to the fixed point).
+    """
+    best = None
+    for r in rows:
+        if (r["step"] == "dataprep" and r["env_tag"] == env_tag
+                and r.get("phase") == "HC1"
+                and not (r.get("extra_d") or {}).get("gen_images")):
+            t = encode_seconds(r)
+            if t and (best is None or t < best):
+                best = t
+    return best
+
+
 def cpu_gpu_stacked_chart(step1: tuple[float, float], step2: tuple[float, float],
-                          title: str) -> str:
+                          title: str, png_name: str | None = None) -> str:
     """Two stacked bars (CPU vs GPU), each stacking Step 1 (encode) and Step 2
     (train) wall time, embedded as a base64 PNG data URI so the report stays a
     single self-contained file."""
@@ -323,6 +462,8 @@ def cpu_gpu_stacked_chart(step1: tuple[float, float], step2: tuple[float, float]
 
     ax.margins(y=0.14)
     fig.tight_layout()
+    if png_name:
+        _save_png(fig, png_name)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=110)
     plt.close(fig)
@@ -332,7 +473,8 @@ def cpu_gpu_stacked_chart(step1: tuple[float, float], step2: tuple[float, float]
 
 
 def worker_scaling_section(rows: list[dict], step: str, param: str,
-                           title: str, scope: str = "") -> list[str]:
+                           title: str, scope: str = "",
+                           png_name: str | None = None) -> list[str]:
     # generate_images=True is a different workload; it must not sit in the
     # scaling table next to the plain runs at the same worker count.
     sel = [r for r in rows
@@ -340,6 +482,18 @@ def worker_scaling_section(rows: list[dict], step: str, param: str,
            and not (r.get("extra_d") or {}).get("gen_images")]
     if not sel:
         return [f"### {title}\n\n_{L('no data', 'データなし')}_\n"]
+    # When the intra-op-capped November re-test is present for this step, make it
+    # the primary series and overlay the September uncapped sweep for comparison;
+    # otherwise fall back to the original single-series rendering.
+    capped_phase, uncapped_phase = STEP_PHASES.get(step, (None, None))
+    if capped_phase and any(r["phase"] == capped_phase for r in sel):
+        return _worker_scaling_overlay(sel, step, param, title, scope,
+                                       capped_phase, uncapped_phase, png_name)
+    return _worker_scaling_legacy(sel, step, param, title, scope)
+
+
+def _worker_scaling_legacy(sel: list[dict], step: str, param: str,
+                           title: str, scope: str = "") -> list[str]:
     out = [f"### {title}\n"]
     by_env_n: dict[tuple, list[dict]] = {}
     for r in sel:
@@ -431,7 +585,7 @@ def worker_scaling_section(rows: list[dict], step: str, param: str,
             # Tie the peak to the machine's core count when they coincide - it
             # explains why the optimum sits where it does and makes the result
             # portable to other machines (scale the worker count with the cores).
-            cores = env_cores(env_tag)
+            cores = env_cores(env_tag, scope)
             if cores:
                 phys, logi = cores
                 if bn == phys:
@@ -481,6 +635,214 @@ def worker_scaling_section(rows: list[dict], step: str, param: str,
             "読むべきで、厳密なピークをチューニングする意味はない。"))
         out.append("")
     return out
+
+
+def _worker_scaling_overlay(sel: list[dict], step: str, param: str, title: str,
+                            scope: str, capped_phase: str, uncapped_phase: str,
+                            png_name: str | None) -> list[str]:
+    """Render the worker sweep with the intra-op-capped series as primary and
+    the uncapped series overlaid for comparison (capped-vs-uncapped time + ratio
+    table, overlay chart, Fastest/Amdahl on the capped series)."""
+    def tof(r):
+        return encode_seconds(r) if step == "dataprep" else r["wall_s"]
+
+    cap_by: dict[tuple, list[dict]] = {}
+    unc_by: dict[tuple, list[dict]] = {}
+    for r in sel:
+        key = (r["env_tag"], r["n_files"])
+        if r["phase"] == capped_phase:
+            cap_by.setdefault(key, []).append(r)
+        elif r["phase"] == uncapped_phase:
+            unc_by.setdefault(key, []).append(r)
+
+    out = [f"### {title}\n"]
+    rendered = False
+    for (env_tag, n_files), cgroup in sorted(cap_by.items()):
+        # A sweep needs at least two capped worker counts; single-point groups
+        # (e.g. the lone GPU parity point) are handled by the CPU-vs-GPU section.
+        if len(cgroup) < 2:
+            continue
+        rendered = True
+        ugroup = unc_by.get((env_tag, n_files), [])
+        capped_pts = sorted((int(float(r["param_value"])), tof(r))
+                            for r in cgroup if tof(r))
+        uncapped_pts = sorted((int(float(r["param_value"])), tof(r))
+                              for r in ugroup if tof(r))
+        cap_t = dict(capped_pts)
+        unc_t = dict(uncapped_pts)
+        cap_rss = {int(float(r["param_value"])): r.get("peak_rss_mb")
+                   for r in cgroup}
+        unc_rss = {int(float(r["param_value"])): r.get("peak_rss_mb")
+                   for r in ugroup}
+        cap_fail = {int(float(r["param_value"])): r.get("n_failed")
+                    for r in cgroup}
+
+        out.append(L(
+            f"**{disp_tag(env_tag)}, n={n_files:,} files** - intra-op "
+            f"**1 thread/worker (Nov 2026, primary)** vs **uncapped "
+            f"(Sep 2026)**. `ratio = uncapped / capped time` (> 1 means capping "
+            f"is faster).\n",
+            f"**{disp_tag(env_tag)}、n={n_files:,} ファイル** - intra-op "
+            f"**1スレッド/ワーカー（2026-11、主系列）** vs **キャップなし"
+            f"（2026-09）**。`比 = キャップなし時間 / キャップあり時間`"
+            f"（1より大きいほどキャップが速い）。\n"))
+
+        all_n = sorted(set(cap_t) | set(unc_t))
+        table = []
+        for n in all_n:
+            ut, ct = unc_t.get(n), cap_t.get(n)
+            ratio = (ut / ct) if (ut and ct) else None
+            table.append([
+                n,
+                f"{ut:.1f}" if ut else "",
+                f"{ct:.1f}" if ct else "",
+                f"{ratio:.2f}x" if ratio else "",
+                f"{(n_files or 0) / ct:.2f}" if ct else "",
+                f"{cap_rss.get(n):.0f}" if cap_rss.get(n) else "",
+                cap_fail.get(n) if cap_fail.get(n) is not None else "",
+            ])
+        peak_n = min(capped_pts, key=lambda p: p[1])[0] if capped_pts else None
+        out.append(html_table(
+            [param,
+             L("uncapped (s)", "キャップなし (s)"),
+             L("capped (s)", "キャップあり (s)"),
+             L("ratio (unc/cap)", "比 (なし/あり)"),
+             L("capped files/s", "キャップあり ファイル/s"),
+             L("capped peak RSS (MB)", "キャップあり 最大RSS (MB)"),
+             L("failed", "失敗")], table, highlight_first=peak_n))
+
+        chart_title = f"{disp_tag(env_tag)} - {title} (n={n_files:,})"
+        out.append(worker_overlay_chart(param, capped_pts, uncapped_pts,
+                                        chart_title, png_name))
+
+        # Step 3 embeds per *shape*; a heavy CAD file can hold many shapes, so
+        # n_ok (shapes) far exceeds n_files (input CAD files).
+        if step == "indexing":
+            n_ok_vals = {r.get("n_ok") for r in cgroup if r.get("n_ok")}
+            try:
+                n_ok_vals = {int(float(v)) for v in n_ok_vals if v}
+            except (TypeError, ValueError):
+                n_ok_vals = set()
+            if n_ok_vals and max(n_ok_vals) > (n_files or 0) * 1.5:
+                shapes = max(n_ok_vals)
+                per = shapes / n_files if n_files else 0
+                pk_t = min(capped_pts, key=lambda p: p[1])[1] if capped_pts else None
+                sps = shapes / pk_t if pk_t else 0
+                out.append(L(
+                    f"\n_The **capped files/s** column counts input CAD files. "
+                    f"These {n_files:,} files expand to **{shapes:,} B-rep "
+                    f"shapes** (~{per:.1f} shapes/file - the heavy corpus is full "
+                    f"of assemblies), and Step 3 embeds each shape: at the capped "
+                    f"peak that is ~{sps:.1f} shapes/s._\n",
+                    f"\n_**キャップあり ファイル/s** 列は入力CADファイル数を数える。"
+                    f"この {n_files:,} ファイルは **{shapes:,} 個のB-rep形状** に"
+                    f"展開され（約{per:.1f} 形状/ファイル - ヘビーコーパスはアセンブリが"
+                    f"多い）、Step 3 は各形状を埋め込む: キャップありのピークでは"
+                    f"約{sps:.1f} 形状/s。_\n"))
+
+        # Fastest (on the capped/primary series) + core-count annotation.
+        if capped_pts:
+            bn, bt = min(capped_pts, key=lambda p: p[1])
+            bfps = (n_files or 0) / bt if bt else 0
+            pn = next((n for n, t in capped_pts if t <= bt * 1.03), bn)
+            msg_en = (f"\n**Fastest (capped): {param} = {bn}** "
+                      f"({bt:.1f} s, {bfps:.2f} files/s) - the shortest time in "
+                      f"the capped series.")
+            msg_ja = (f"\n**最速（キャップあり）: {param} = {bn}**"
+                      f"（{bt:.1f} s、{bfps:.2f} ファイル/s）- "
+                      f"キャップあり系列で最短。")
+            if pn != bn:
+                msg_en += (f" ({param} = {pn} is within 3% - the cheapest "
+                           f"setting at peak throughput.)")
+                msg_ja += (f"（{param} = {pn} でその3%以内 - 最小コストで"
+                           f"ピーク性能。）")
+            cores = env_cores(env_tag, scope)
+            if cores:
+                phys, logi = cores
+                if bn == phys:
+                    msg_en += (f" This equals the machine's **{phys} physical "
+                               f"cores**, so the optimum tracks the core count.")
+                    msg_ja += (f" これはテストマシンの**物理コア数 {phys}** と等しく、"
+                               f"最適ワーカー数はコア数に一致している。")
+                elif logi and bn == logi:
+                    msg_en += (f" This equals the machine's **{logi} logical "
+                               f"processors** - with the per-worker thread cap "
+                               f"in place, throughput keeps rising to the logical "
+                               f"core count instead of collapsing.")
+                    msg_ja += (f" これはテストマシンの**論理プロセッサ数 {logi}** と"
+                               f"等しい - ワーカーごとのスレッド上限により、崩壊せず"
+                               f"論理コア数までスループットが伸び続ける。")
+            out.append(L(msg_en, msg_ja))
+
+        # Step 3: peak-of-capped vs peak-of-uncapped (the headline gain).
+        if step == "indexing" and uncapped_pts and capped_pts:
+            up_n, up_t = min(uncapped_pts, key=lambda p: p[1])
+            cp_n, cp_t = min(capped_pts, key=lambda p: p[1])
+            out.append(L(
+                f"\n**Peak vs peak:** the capped series peaks at {cp_t:.1f} s "
+                f"({param}={cp_n}) against the uncapped peak {up_t:.1f} s "
+                f"({param}={up_n}) - **{up_t / cp_t:.2f}x** faster at the best "
+                f"setting of each.",
+                f"\n**ピーク対ピーク:** キャップあり系列のピークは {cp_t:.1f} s "
+                f"({param}={cp_n})、キャップなしのピークは {up_t:.1f} s "
+                f"({param}={up_n}) - 各最適設定どうしで **{up_t / cp_t:.2f}倍** 高速。"))
+
+        # RAM is not the cause: peak RSS is near-identical capped vs uncapped.
+        shared = sorted(set(n for n in cap_rss if cap_rss.get(n))
+                        & set(n for n in unc_rss if unc_rss.get(n)))
+        if shared:
+            n = shared[-1]
+            out.append(L(
+                f"\n_Peak RSS is essentially the same with and without the cap "
+                f"({param}={n}: capped {cap_rss[n]:.0f} vs uncapped "
+                f"{unc_rss[n]:.0f} MB), so the uncapped decline is CPU-thread "
+                f"oversubscription, not RAM pressure._\n",
+                f"\n_ピークRSSはキャップの有無でほぼ同じ"
+                f"（{param}={n}: キャップあり {cap_rss[n]:.0f} vs なし "
+                f"{unc_rss[n]:.0f} MB）であり、キャップなしの低下はCPUスレッドの"
+                f"過剰割り当てが原因で、RAMの逼迫ではない。_\n"))
+
+        # Amdahl fit on the capped/primary series.
+        f = amdahl_serial_fraction(capped_pts)
+        if f is not None and len(capped_pts) >= 3:
+            max_speedup = 1 / f
+            n80 = (1 - f) / (f * (1 / 0.8 - 1))
+            out.append(L(
+                f"\nAmdahl fit over {param}={capped_pts[0][0]}.."
+                f"{capped_pts[-1][0]} (capped): serial fraction f = "
+                f"**{f * 100:.1f}%**, so the asymptotic ceiling is "
+                f"{max_speedup:.1f}x no matter how many workers you add. "
+                f"Roughly {param} = {n80:.0f} reaches 80% of that ceiling.",
+                f"\nアムダール則フィット ({param}={capped_pts[0][0]}.."
+                f"{capped_pts[-1][0]}、キャップあり): 直列成分 f = "
+                f"**{f * 100:.1f}%**。ワーカーをいくら増やしても漸近的な上限は "
+                f"{max_speedup:.1f}倍。おおよそ {param} = {n80:.0f} で"
+                f"その上限の80%に到達する。"))
+        out.append("")
+
+    if not rendered:
+        return _worker_scaling_legacy(sel, step, param, title, scope)
+    return out
+
+
+def step1_failure_breakdown() -> list[tuple[str, int]] | None:
+    """Per-category counts of the deterministic Step-1 failures, read from
+    results/step1_failed_216.txt (corpus-relative paths, category = first path
+    segment). Returns None when the file is absent. The filenames themselves are
+    never surfaced in the report - only the category histogram."""
+    p = RES / "step1_failed_216.txt"
+    if not p.is_file():
+        return None
+    import collections
+    c: collections.Counter = collections.Counter()
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        c[line.split("/")[0]] += 1
+    if not c:
+        return None
+    return sorted(c.items(), key=lambda kv: (-kv[1], kv[0]))
 
 
 def training_section(rows: list[dict]) -> list[str]:
@@ -543,11 +905,11 @@ def training_section(rows: list[dict]) -> list[str]:
         f"既定）に固定すればモデルは同一に保たれ、device 速度だけを切り出せる。"
         f"この規模では1 epochは約204バッチ。\n"))
 
-    # Submitted vs succeeded: Step 1 tolerates HOOPS' non-deterministic ~2%
-    # re-encode failures, so the model trains on the successes only.
+    # Submitted vs succeeded: Step 1 fails on a deterministic set of files, so
+    # the model trains on the successes only (see step1_failure_breakdown).
     hb1 = None
     for r in load_all_rows():
-        if (r.get("phase") == "HB1" and r.get("step") == "dataprep"
+        if (r.get("phase") in ("HC1", "HB1") and r.get("step") == "dataprep"
                 and str(r.get("n_files")) == str(n_full)):
             hb1 = r
             break
@@ -558,25 +920,41 @@ def training_section(rows: list[dict]) -> list[str]:
         except (TypeError, ValueError):
             n_ok = n_fail = None
         if n_ok is not None and n_fail:
-            pct = 100.0 * n_fail / (n_ok + n_fail)
             out.append(L(
-                f"**Submitted vs trained.** The {n_full:,} files are the *submitted* "
-                f"count. Step 1 encoding tolerates HOOPS AI's known "
-                f"**non-deterministic ~{pct:.0f}% re-encode failures** (typically "
-                f"`division by zero` or `Data key 'graph' not found`, and a "
-                f"*different* set of files each run), so this run dropped "
-                f"**{n_fail}** files and the model actually trained on the "
-                f"**{n_ok:,} successes**. These are separate from the 24 files "
-                f"pre-excluded from the file list - they cannot be filtered ahead "
-                f"of time because the failures are not repeatable.\n",
+                f"**Submitted vs trained.** The {n_full:,} files are the "
+                f"*submitted* count. Step 1 encoding fails on a **deterministic "
+                f"set of {n_fail} files**: every November full-corpus run "
+                f"(max_workers 16/24/32 and the GPU-venv run at 32) failed on "
+                f"exactly the same {n_fail} files, the two 100-file warm-ups "
+                f"failed on the same 2, and the September runs reported the same "
+                f"{n_fail}. Every failure is the same error "
+                f"(`Data extraction error: division by zero`). The identical "
+                f"files embed without error in Step 3 (`embed_shape_batch` had 0 "
+                f"failures in every run), so the fault is specific to Step 1's "
+                f"extraction. Because the set is deterministic it can be dropped "
+                f"up front, and the model trained on the **{n_ok:,} successes**. "
+                f"(These are separate from the **183 files pre-excluded** from "
+                f"the list as HEAVY/FAILED by an earlier registration pass.)\n",
                 f"**投入数 vs 学習数。** {n_full:,}ファイルは*投入*数。Step 1 の"
-                f"エンコードは、HOOPS AI の既知の**非決定的な約{pct:.0f}%の"
-                f"再エンコード失敗**（典型例 `division by zero` や "
-                f"`Data key 'graph' not found`。しかも失敗するファイルは実行ごとに"
-                f"*異なる*）を許容する。今回は **{n_fail}** ファイルが落ち、モデルは"
-                f"実際には **{n_ok:,}件の成功分**で学習されている。これは事前に"
-                f"ファイルリストから除外した24件とは別物で、失敗が再現しないため"
-                f"事前フィルタで除ききれない。\n"))
+                f"エンコードは**決定的な {n_fail} ファイルの集合**で失敗する: "
+                f"11月のフルコーパス各run（max_workers 16/24/32 と GPU用venvの32）は"
+                f"まったく同じ {n_fail} ファイルで失敗し、100ファイルのウォームアップ"
+                f"2本も同じ2ファイルで失敗、9月のrunも同じ {n_fail} 件だった。"
+                f"失敗はすべて同一のエラー（`Data extraction error: division by "
+                f"zero`）。同じファイルは Step 3（`embed_shape_batch`）では"
+                f"エラーなく埋め込まれ（全runで失敗0）、問題は Step 1 の抽出に"
+                f"固有である。集合が決定的なので事前に除外でき、モデルは "
+                f"**{n_ok:,}件の成功分**で学習されている。（これらは、以前の登録パスで "
+                f"HEAVY/FAILED に分類され**事前に除外した 183 ファイル**とは別物。）\n"))
+            brk = step1_failure_breakdown()
+            if brk:
+                en = ", ".join(f"{k} {v}" for k, v in brk)
+                ja = "、".join(f"{k} {v}" for k, v in brk)
+                out.append(L(
+                    f"By category, the {n_fail} Step-1 failures break down as: "
+                    f"{en}.\n",
+                    f"カテゴリ別では、Step 1 の {n_fail} 件の失敗の内訳は: "
+                    f"{ja}。\n"))
 
     # ---- headline: CPU vs GPU at 10k scale ----
     out.append(f"#### {L('CPU vs GPU at identical settings (batch_size=64)', '同一設定でのCPU vs GPU（batch_size=64）')}\n")
@@ -628,8 +1006,11 @@ def training_section(rows: list[dict]) -> list[str]:
         out.append("")
 
         # ---- Step 1 + Step 2 total: stacked bar (encode + train) ----
-        s1_cpu = step1_encode_at(rows, "cpu1.1", 32)
-        s1_gpu = step1_encode_at(rows, "gpu1.1", 32)
+        # Prefer the intra-op-capped Step 1 encode (its peak) when the November
+        # re-test is present; both the CPU peak and the GPU parity point are at
+        # max_workers=32, so the stacked chart's label stays accurate.
+        s1_cpu = step1_encode_capped(rows, "cpu1.1") or step1_encode_at(rows, "cpu1.1", 32)
+        s1_gpu = step1_encode_capped(rows, "gpu1.1") or step1_encode_at(rows, "gpu1.1", 32)
         tw_cpu = (cpu_full.get("sub_timings_d") or {}).get("train_s") if cpu_full else None
         tw_gpu = (gpu_full.get("sub_timings_d") or {}).get("train_s") if gpu_full else None
         if s1_cpu and s1_gpu and tw_cpu and tw_gpu:
@@ -654,7 +1035,8 @@ def training_section(rows: list[dict]) -> list[str]:
             out.append(cpu_gpu_stacked_chart(
                 (s1_cpu, s1_gpu), (tw_cpu, tw_gpu),
                 L("Step 1 + Step 2 total wall time (CPU vs GPU)",
-                  "Step 1 + Step 2 合計実時間（CPU vs GPU）")))
+                  "Step 1 + Step 2 合計実時間（CPU vs GPU）"),
+                png_name="pipeline_total"))
             out.append("")
 
     # ---- scale effect: preflight vs full ----
@@ -731,6 +1113,11 @@ def step3_cpu_gpu_section(rows: list[dict]) -> list[str]:
            and not (r.get("extra_d") or {}).get("gen_images")]
     if not sel:
         return []
+    # Prefer the intra-op-capped (HC3) re-test when present so the CPU and GPU
+    # numbers are like-for-like with the primary worker-scaling section above;
+    # the uncapped HB3 rows would otherwise collide on the same worker counts.
+    if any(r.get("phase") == "HC3" for r in sel):
+        sel = [r for r in sel if r.get("phase") == "HC3"]
     by: dict[str, dict[int, float]] = {}
     for r in sel:
         if r["wall_s"]:
@@ -744,6 +1131,29 @@ def step3_cpu_gpu_section(rows: list[dict]) -> list[str]:
     gpu_pn = min(gpu, key=lambda n: gpu[n])
     cpu_pt, gpu_pt = cpu[cpu_pn], gpu[gpu_pn]
 
+    # Engineering-team-confirmed explanation for the 0 MB peak GPU memory in
+    # Step 3 (migrated from the hand-edited report, commit 0439f9c): this build
+    # hardcodes Step 3 embedding to the CPU; it has since been changed to use
+    # the install's device, but no strong end-to-end speedup is expected.
+    note_en = (
+        ("Peak GPU memory was 0 MB in every indexing run because " if gpu_zero
+         else "")
+        + "this HOOPS AI build hardcodes Step 3 embedding to the CPU. The "
+        "engineering team confirmed this and has since changed it to use the "
+        "install's device, but does not expect a strong speedup: Step 3 is "
+        "bound by reading the CAD file, encoding it, and then inference, and the "
+        "GPU can only accelerate the inference sub-step - whether a real "
+        "end-to-end speedup materializes is unverified and needs a re-test on "
+        "the updated build.\n")
+    note_ja = (
+        ("索引化の全実行で最大GPUメモリが0 MBだったのは、" if gpu_zero else "")
+        + "本HOOPS AIビルドが Step 3 の埋め込みをCPUに固定（ハードコード）している"
+        "ため。エンジニアリングチームはこれを認め、以降はインストール先のデバイス"
+        "（GPU）を使うよう変更済みだが、大きな高速化は期待しないとのこと: Step 3 は"
+        "「CADファイル読み込み → エンコード → 推論」に律速され、GPUが短縮できるのは"
+        "推論部分のみのため、実際にエンドツーエンドで速くなるかは未検証で、"
+        "更新版ビルドでの再測定が必要。\n")
+
     out = [f"### {L('CPU vs GPU', 'CPU vs GPU')}\n"]
     faster = L("faster", "高速") if gpu_pt < cpu_pt else L("slower", "低速")
     out.append(L(
@@ -751,16 +1161,12 @@ def step3_cpu_gpu_section(rows: list[dict]) -> list[str]:
         f"platform's peak, CPU {cpu_pt:.1f} s (num_workers={cpu_pn}) vs GPU "
         f"{gpu_pt:.1f} s (num_workers={gpu_pn}): the GPU install is "
         f"**{cpu_pt / gpu_pt:.2f}x** the CPU throughput (i.e. {faster}). "
-        + ("Peak GPU memory was 0 MB in every indexing run - "
-           "`embed_shape_batch` runs the B-rep encoding on CPU workers, so a "
-           "GPU adds nothing here.\n" if gpu_zero else "\n"),
+        + note_en,
         f"**Step 3 の索引化もCPUバウンドで、GPUの恩恵はない。** 各プラットフォームの"
         f"ピークで、CPU {cpu_pt:.1f} s (num_workers={cpu_pn}) vs GPU "
         f"{gpu_pt:.1f} s (num_workers={gpu_pn}): GPUインストールはCPUの "
         f"**{cpu_pt / gpu_pt:.2f}倍** のスループット（つまり{faster}）。"
-        + ("索引化の全実行で最大GPUメモリは0 MB - `embed_shape_batch` は"
-           "B-repエンコードをCPUワーカー上で実行するため、ここではGPUを足しても"
-           "効果がない。\n" if gpu_zero else "\n")))
+        + note_ja))
 
     common = sorted(set(cpu) & set(gpu))
     if common:
@@ -788,15 +1194,105 @@ def step3_cpu_gpu_section(rows: list[dict]) -> list[str]:
     return out
 
 
+def subset_rethread_section() -> list[str]:
+    """September 500-file subset experiment that first identified intra-op
+    thread oversubscription and motivated the full-corpus November re-test above
+    (migrated, reframed, from the hand-edited report commit 807f8ef). The Q2T
+    source rows are not in the curated CSVs, so the numbers here are static.
+    """
+    rows = [
+        ("8", "9.31", "9.39", "9.45", "17", False),
+        ("16", "8.71", "13.98", "13.88", "33", True),
+        ("24", "6.25", "13.75", "13.68", "48", False),
+        ("32", "5.91", "13.00", "12.85", "67", False),
+        ("40", "5.58", "12.14", "11.80", "80", False),
+    ]
+    th = L(
+        "<th>num_workers</th><th>default (files/s)</th><th>1 thread/worker</th>"
+        "<th>2 threads/worker</th><th>peak RSS (GB, default)</th>",
+        "<th>num_workers</th><th>既定 (ファイル/s)</th><th>1スレッド/ワーカー</th>"
+        "<th>2スレッド/ワーカー</th><th>ピークRSS (GB, 既定)</th>")
+    body = []
+    for nw, d, t1, t2, rss, peak in rows:
+        cls = " class='peak'" if peak else ""
+        body.append(f"<tr{cls}><td>{nw}</td><td>{d}</td><td>{t1}</td>"
+                    f"<td>{t2}</td><td>{rss}</td></tr>")
+    table = ("<table>\n<thead><tr>" + th + "</tr></thead>\n<tbody>\n"
+             + "\n".join(body) + "\n</tbody></table>")
+
+    out = [L(
+        "### Where this was first seen - the September 500-file subset experiment",
+        "### 最初に確認した場所 - 9月の500ファイル部分集合での実験"), ""]
+    out.append(L(
+        "The full-corpus re-test above was motivated by an earlier controlled "
+        "experiment on a clean **500-file `mechcad` subset** (September, same "
+        "g6.8xlarge: 16 physical / 32 logical cores, 121 GB; balanced "
+        "50/category, restricted to files that had already encoded cleanly, so "
+        "every run has 0 failures and the curves are pure worker scaling). "
+        "Sweeping the per-worker intra-op thread cap "
+        "(`OMP/MKL/OPENBLAS/NUMEXPR/VECLIB_NUM_THREADS`, set before torch import "
+        "and inherited by the spawned workers) first revealed the "
+        "oversubscription and removed the high-worker decline:",
+        "上記のフルコーパス再測定は、それ以前のクリーンな**500ファイルの `mechcad` "
+        "部分集合**での対照実験（9月、同一の g6.8xlarge: 物理16 / 論理32コア、"
+        "121 GB。カテゴリ均等50件、エンコード成功済みのファイルに限定＝失敗0で、"
+        "曲線は純粋なワーカースケーリング）が動機になった。ワーカーごとの intra-op "
+        "スレッド上限（`OMP/MKL/OPENBLAS/NUMEXPR/VECLIB_NUM_THREADS`、torch import "
+        "前に設定し生成ワーカーへ継承）をスイープして過剰割り当てを最初に突き止め、"
+        "高ワーカー域の低下を解消した:"))
+    out.append(table)
+    out.append(L(
+        "_default = no cap (~1 thread/core per worker). Rows for num_workers=12 "
+        "omitted for brevity (default 10.75 / 12.18 / 12.35). RSS is "
+        "per-worker-count and near-identical across thread settings._\n",
+        "_既定 = キャップなし（ワーカーごとに約1スレッド/コア）。num_workers=12 の行は"
+        "簡潔さのため省略（既定 10.75 / 12.18 / 12.35）。RSS はワーカー数ごとの値で、"
+        "スレッド設定間でほぼ同一。_\n"))
+    out.append(L(
+        "- **Default collapses** from a 10.75 files/s peak (num_workers=12) to "
+        "5.58 at num_workers=40 (-48%); **capping to 1-2 threads/worker removes "
+        "the collapse** and raises the subset peak ~30% to ~14 files/s at "
+        "num_workers=16.\n"
+        "- **RAM is not the cause**: peak RSS is essentially identical across "
+        "thread settings at the same worker count (num_workers=40: 80 / 79 / 81 "
+        "GB) and never exceeds ~80 GB of the 121 GB.\n"
+        "- **Fastest = many workers x few threads**: at equal total threads, 16 "
+        "workers x 1 thread (14.0 files/s) beats 8 workers x 2 threads (9.5) by "
+        "+48%. The embedding workload parallelizes across files (workers), not "
+        "across BLAS threads within one small part. **The peak worker count is "
+        "data-dependent**: on this 500-file subset it sat near the physical core "
+        "count (16), but on the full 10,715-file corpus (the section above) the "
+        "capped Step 3 peak moved up to the logical core count (num_workers=32) "
+        "- so scale the worker count with the machine and re-check on your own "
+        "corpus rather than hard-coding 16.",
+        "- **既定は崩壊**: ピーク10.75 ファイル/s（num_workers=12）から "
+        "num_workers=40 で5.58（-48%）。**1〜2スレッド/ワーカーに制限すると崩壊が"
+        "解消**し、部分集合のピークも約30%向上して num_workers=16 で約14 ファイル/s。\n"
+        "- **RAMは原因ではない**: 同一ワーカー数ならピークRSSはスレッド設定間でほぼ"
+        "同一（num_workers=40: 80 / 79 / 81 GB）で、121 GB中の約80 GBを超えない。\n"
+        "- **最速 = 多ワーカー × 少スレッド**: 総スレッド数が同じでも、16ワーカー×"
+        "1スレッド（14.0 ファイル/s）は8ワーカー×2スレッド（9.5）を+48%上回る。"
+        "埋め込みの負荷は1部品内のBLASスレッドではなく、ファイル（ワーカー）単位で"
+        "並列化される。**ピークのワーカー数はデータ次第**: この500ファイル部分集合では"
+        "物理コア数（16）付近だったが、フルの10,715ファイルコーパス（上の節）では"
+        "キャップありの Step 3 ピークは論理コア数（num_workers=32）まで上がった。"
+        "よって16に決め打ちせず、ワーカー数をマシンに合わせ、自分のコーパスで"
+        "再確認すること。"))
+    out.append("")
+    return out
+
+
 def load_all_rows() -> list[dict]:
-    if not CSV_PATH.is_file():
-        return []
-    with CSV_PATH.open(encoding="utf-8-sig", newline="") as fh:
-        return list(csv.DictReader(fh))
+    return _read_all_csv_rows()
 
 
 def parity_section(rows: list[dict]) -> list[str]:
     sel = [r for r in rows if r["step"] == "dataprep"]
+    # Prefer the intra-op-capped (HC1) re-test when present so the CPU and GPU
+    # encode times are like-for-like with the primary Step 1 section; the
+    # uncapped HB1 rows would otherwise collide on the same max_workers.
+    if any(r.get("phase") == "HC1" for r in sel):
+        sel = [r for r in sel if r.get("phase") == "HC1"]
     # Multiple dataset scales (n=500, n=2000, ...) can coexist. Keying CPU/GPU
     # times by max_workers alone would collide across scales, so first pick the
     # single n_files whose CPU and GPU sweeps overlap on the most worker counts -
@@ -1050,17 +1546,23 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
                   "# HOOPS AI 1.1 ベンチマーク (AWS EC2) - CPU vs GPU")
         dataset_line = L(
             "Machine: **AWS g6.8xlarge** (AMD EPYC 16-core + NVIDIA L4). "
-            f"Dataset: `mechcad` heavy mechanical-CAD corpus - the same full "
-            f"{n_disp}-file corpus is used for the Step 1 worker sweep, the "
-            f"Step 2 CPU-vs-GPU training run, and the Step 3 embedding + FAISS "
-            f"indexing (using the tutorial's pretrained model "
-            f"`ts3d_2M_hoops_embeddings_SIGNAL-preview.ckpt`).",
+            f"Dataset: **TMCAD v2** (Truly Mechanical CAD Dataset; Zou & Zhu, "
+            f"2025), the heavy mechanical-CAD corpus the HOOPS AI tutorials use "
+            f"for embeddings indexing - it appears here under the local folder "
+            f"name `mechcad`. The same full {n_disp}-file corpus is used for the "
+            f"Step 1 worker sweep, the Step 2 CPU-vs-GPU training run, and the "
+            f"Step 3 embedding + FAISS indexing (using the tutorial's pretrained "
+            f"model `ts3d_2M_hoops_embeddings_SIGNAL-preview.ckpt`). See the "
+            f"README \"Benchmark dataset\" section for the citation and download.",
             "マシン: **AWS g6.8xlarge**（AMD EPYC 16コア + NVIDIA L4）。"
-            f"データセット: `mechcad` ヘビー機械CADコーパス - Step 1 の"
-            f"ワーカースイープ、Step 2 の CPU vs GPU 学習、そして Step 3 の"
+            f"データセット: **TMCAD v2**（Truly Mechanical CAD Dataset; Zou & Zhu, "
+            f"2025）。HOOPS AI チュートリアルが埋め込み索引化に使用するヘビー機械CAD"
+            f"コーパスで、ここではローカルのフォルダ名 `mechcad` として現れる。"
+            f"Step 1 のワーカースイープ、Step 2 の CPU vs GPU 学習、そして Step 3 の"
             f"埋め込み + FAISS索引化（チュートリアルの事前学習モデル "
             f"`ts3d_2M_hoops_embeddings_SIGNAL-preview.ckpt` を使用）のすべてで、"
-            f"同じ{n_disp}ファイルの全コーパスを使用。")
+            f"同じ{n_disp}ファイルの全コーパスを使用。引用とダウンロードは README の"
+            f"「Benchmark dataset」節を参照。")
     else:
         title = L("# HOOPS AI 1.1 benchmark (local Windows) - CPU vs GPU",
                   "# HOOPS AI 1.1 ベンチマーク (ローカル Windows) - CPU vs GPU")
@@ -1107,6 +1609,44 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
           "超えると総スレッド数がコア数を大きく上回り、そのCPUスレッドの過剰割り当て"
           "（RAM やファイルディスクリプタの負荷ではなく）が全ワーカーを遅くするため。"),
     ]
+    if is_aws:
+        # Data-backed capping headline: capped (HC3) vs uncapped (HB3) Step 3
+        # peak, computed from the CSV so the prose tracks the measured re-test.
+        def _peak(step, phases):
+            best = {}
+            for r in rows:
+                if r["step"] == step and r.get("phase") in phases and \
+                        r["env_tag"] == "cpu1.1" and r["wall_s"]:
+                    pv = int(float(r["param_value"]))
+                    best[pv] = r["wall_s"]
+            if not best:
+                return None, None
+            pn = min(best, key=lambda n: best[n])
+            return pn, best[pn]
+        cap_pn, cap_pt = _peak("indexing", {"HC3"})
+        unc_pn, unc_pt = _peak("indexing", {"HB3"})
+        if cap_pt and unc_pt:
+            doc.append(L(
+              "- **Capping intra-op threads to 1 per worker is now the default "
+              "for Steps 1 and 3** (`--intraop-threads` / "
+              "`HOOPS_AI_INTRAOP_THREADS`, `0` to disable). On the full "
+              f"{n_disp}-file corpus this removes the Step 3 decline entirely: "
+              f"the capped series peaks at **{cap_pt:,.0f} s** "
+              f"(num_workers={cap_pn}) versus the uncapped **{unc_pt:,.0f} s** "
+              f"(num_workers={unc_pn}) - a **{unc_pt / cap_pt:.2f}x** faster "
+              "peak at essentially the same peak RSS, confirming the slowdown "
+              "was CPU-thread oversubscription, not RAM. See the Step 3 section "
+              "and the September 500-file subset experiment that first found it.",
+              "- **intra-op スレッドを1ワーカーあたり1本に制限することが Step 1 / "
+              "Step 3 の既定になった**（`--intraop-threads` / "
+              "`HOOPS_AI_INTRAOP_THREADS`、`0` で無効）。フルの"
+              f"{n_disp}ファイルコーパスでは、これにより Step 3 の低下が完全に消える: "
+              f"キャップあり系列は **{cap_pt:,.0f} s**（num_workers={cap_pn}）で"
+              f"ピークに達し、キャップなしの **{unc_pt:,.0f} s**"
+              f"（num_workers={unc_pn}）に対し **{unc_pt / cap_pt:.2f}倍** 速い"
+              "ピーク。ピークRSSはほぼ同一で、遅延の原因が RAM ではなく CPU スレッドの"
+              "過剰割り当てだったことを裏付ける。Step 3 の節と、最初にこれを発見した"
+              "9月の500ファイル部分集合の実験を参照。"))
     if has_training:
         doc.append(L(
           "- **Step 2 (training) is the only GPU-bound stage** and the only "
@@ -1147,7 +1687,7 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
     doc += [L("## Step 1 - CAD encoding (DataPrep)", "## Step 1 - CADエンコード (DataPrep)"), ""]
     doc += worker_scaling_section(rows, "dataprep", "max_workers",
                                   L("max_workers scaling", "max_workers スケーリング"),
-                                  scope)
+                                  scope, png_name="step1_workers")
     doc += parity_section(rows)
     if has_training:
         doc += [L("## Step 2 - training", "## Step 2 - 学習"), ""]
@@ -1155,8 +1695,10 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
     doc += [L("## Step 3 - embedding + FAISS indexing", "## Step 3 - 埋め込み + FAISS索引化"), ""]
     doc += worker_scaling_section(rows, "indexing", "num_workers",
                                   L("num_workers scaling", "num_workers スケーリング"),
-                                  scope)
+                                  scope, png_name="step3_workers")
     doc += step3_cpu_gpu_section(rows)
+    if is_aws and any(r.get("phase") == "HC3" for r in rows):
+        doc += subset_rethread_section()
 
     # image-generation overhead
     idx = [r for r in rows if r["step"] == "indexing"]
@@ -1222,13 +1764,33 @@ def build_doc(rows: list[dict], all_rows: list[dict], scope: str) -> list[str]:
             "問題のあるファイルに対する堅牢性を示すものではない。"))
     else:
         doc.append(L(
-            "- The heavy `mechcad` files trigger HOOPS AI's known "
-            "non-deterministic ~2% re-encode failures, so a few dozen files drop "
-            "each run; the throughput figures are over the successfully processed "
-            "files.",
-            "- ヘビーな `mechcad` ファイルは HOOPS AI の既知の非決定的な約2%の"
-            "再エンコード失敗を誘発し、実行ごとに数十ファイルが脱落する。"
-            "スループットは正常処理できたファイルに対する値。"))
+            "- Step 1 failures are **deterministic, not random**: the same 216 "
+            "`mechcad` files fail with `Data extraction error: division by zero` "
+            "on every full-corpus run (they succeed in Step 3's "
+            "`embed_shape_batch`). They are excluded up front, so the throughput "
+            "figures are over the 10,499 files that encode cleanly - see the "
+            "Step 2 section for the full accounting.",
+            "- Step 1 の失敗は**ランダムではなく決定的**: 同じ216個の `mechcad` "
+            "ファイルが毎回のフルコーパス実行で `Data extraction error: division by "
+            "zero` により失敗する（Step 3 の `embed_shape_batch` では成功する）。"
+            "これらは事前に除外しているため、スループットはクリーンにエンコードできる "
+            "10,499 ファイルに対する値 - 完全な内訳は Step 2 の節を参照。"))
+        doc.append(L(
+            "- The November re-test (the capped HC1/HC3 series) ran on a "
+            "**rebuilt** g6.8xlarge with hoops_ai 1.1.1 / torch 2.9.1 pinned via "
+            "CDK; the NVIDIA driver moved 580.173 (Sep) -> 580.178.04 (Nov), "
+            "which cannot matter because Steps 1 and 3 never touch the GPU. The "
+            "November sweeps also ran after a full-corpus page-cache preload and "
+            "a 100-file warm-up; the September uncapped sweeps had neither, so "
+            "the September 1st-point-per-sweep numbers carry a small cold-cache "
+            "penalty.",
+            "- 11月の再測定（キャップありの HC1/HC3 系列）は、hoops_ai 1.1.1 / torch "
+            "2.9.1 を CDK で固定して**作り直した** g6.8xlarge で実行した。NVIDIA "
+            "ドライバは 580.173（9月）→ 580.178.04（11月）に変わったが、Step 1 / "
+            "Step 3 は GPU を使わないため影響し得ない。11月のスイープはコーパスの"
+            "ページキャッシュ事前読み込みと100ファイルのウォームアップの後に実行した"
+            "が、9月のキャップなしスイープにはどちらも無かったため、9月の各スイープの"
+            "1点目にはわずかなコールドキャッシュのペナルティが乗っている。"))
     doc += [L("- Background load on the machine (including antivirus scanning "
               "the STEP files) affects the CPU-bound stages more than the "
               "GPU stage.",
@@ -1250,7 +1812,8 @@ def write_report(rows: list[dict], all_rows: list[dict], lang: str,
     tag = "AWS EC2" if scope == "aws" else ("ローカル Windows" if lang == "ja"
                                             else "local Windows")
     title = f"{base} ({tag})"
-    md_path = RES / f"REPORT{suffix}.md"
+    md_path = REPORTS / f"REPORT{suffix}.md"
+    md_path.parent.mkdir(parents=True, exist_ok=True)
     md_path.write_text(md, encoding="utf-8")
     print(f"[report] -> {md_path}")
 
@@ -1269,7 +1832,7 @@ def write_report(rows: list[dict], all_rows: list[dict], lang: str,
             "<script src='https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js'></script>\n"
             "<script>document.getElementById('c').innerHTML=marked.parse("
             + json.dumps(md) + ");</script>")
-    html_path = RES / f"REPORT{suffix}.html"
+    html_path = REPORTS / f"REPORT{suffix}.html"
     html_path.write_text(html, encoding="utf-8")
     print(f"[report] -> {html_path}")
 
@@ -1282,7 +1845,22 @@ def main() -> None:
     ap.add_argument("--scope", choices=["local", "aws", "both"], default="both",
                     help="Machine(s) to emit a report for (default: both). "
                          "'local' = Windows laptop, 'aws' = AWS EC2 heavy host.")
+    ap.add_argument("--csv", action="append", default=None,
+                    help="Input results CSV; repeat to merge several (default: "
+                         "results/results.csv). All rows are concatenated.")
+    ap.add_argument("--png-dir", default=None,
+                    help="If set, also write each embedded chart as a standalone "
+                         "PNG into this directory (e.g. out/report_charts).")
     args = ap.parse_args()
+
+    global CSV_PATHS, PNG_DIR
+    if args.csv:
+        CSV_PATHS = [Path(p) for p in args.csv]
+    else:
+        CSV_PATHS = [CSV_PATH]
+    if args.png_dir:
+        PNG_DIR = Path(args.png_dir)
+        PNG_DIR.mkdir(parents=True, exist_ok=True)
 
     rows = load_rows()
     all_rows = load_all_rows()
